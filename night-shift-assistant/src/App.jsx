@@ -190,7 +190,7 @@ export default function App() {
   }
 
   const activeReminders = store.reminders.filter(r => !r.resolved)
-  const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r })) )
+  const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r) }))
   const openRecord = r => { setSelected(r); setScreen('detail') }
 
   return <div className="shell">
