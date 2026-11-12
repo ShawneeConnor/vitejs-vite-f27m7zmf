@@ -38,3 +38,20 @@
  .signature-toolbar small{font-size:10px}
  .signature-toolbar .secondary,.signature-toolbar .primary{min-height:40px;padding:8px 12px}
 }
+
+
+/* Apertura breve: loghi originali e palette istituzionale */
+.splash-screen{position:fixed;inset:0;z-index:1000;background:#fff;display:flex;align-items:center;justify-content:center;padding:28px;animation:splash-out .38s ease 1.38s forwards}
+.splash-content{width:min(100%,420px);display:flex;flex-direction:column;align-items:center;text-align:center;animation:splash-in .55s ease both}
+.splash-logos{width:100%;display:flex;align-items:center;justify-content:center;gap:18px;padding:18px 8px 24px}
+.splash-fresenius{width:48%;max-width:220px;height:auto;object-fit:contain}
+.splash-aom{width:42%;max-width:190px;height:auto;object-fit:contain}
+.splash-divider{width:1px;height:48px;background:#dce4ed;flex:0 0 1px}
+.splash-title{font-size:clamp(27px,7vw,38px);font-weight:800;letter-spacing:2.8px;color:#16477f;line-height:1.1}
+.splash-subtitle{margin-top:10px;font-size:10px;font-weight:700;letter-spacing:1.7px;color:#d58b16}
+.splash-progress{height:3px;width:112px;background:#e8edf3;border-radius:10px;overflow:hidden;margin-top:28px}
+.splash-progress span{display:block;width:100%;height:100%;background:linear-gradient(90deg,#159dc0 0%,#16477f 58%,#df941b 100%);transform:scaleX(0);transform-origin:left;animation:splash-load 1.25s ease .12s forwards}
+@keyframes splash-in{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+@keyframes splash-load{to{transform:scaleX(1)}}
+@keyframes splash-out{to{opacity:0;visibility:hidden;pointer-events:none}}
+@media(prefers-reduced-motion:reduce){.splash-screen,.splash-content,.splash-progress span{animation:none}.splash-screen{animation:splash-out .15s linear 1.1s forwards}.splash-progress span{transform:scaleX(1)}}

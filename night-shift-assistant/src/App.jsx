@@ -30,6 +30,12 @@ export default function App() {
   const [signatureData, setSignatureData] = useState('')
   const [signatureOpen, setSignatureOpen] = useState(false)
   const [showDone, setShowDone] = useState(false)
+  const [showSplash, setShowSplash] = useState(true)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowSplash(false), 1750)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   useEffect(() => { localStorage.setItem(KEY, JSON.stringify(store)) }, [store])
   const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 2500) }
@@ -169,6 +175,34 @@ export default function App() {
       if (y > 275) { doc.addPage(); y = 20 }
       doc.text(line, margin, y); y += 4.7
     })
+    if (r.photos?.length) {
+      if (y > 255) { doc.addPage(); y = 20 }
+      y += 7
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+      doc.text('FOTOGRAFIE ALLEGATE', margin, y)
+      y += 8
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
+      const photoW = 82
+      const photoH = 58
+      const gapX = 10
+      r.photos.forEach((photo, index) => {
+        try {
+          const col = index % 2
+          if (col === 0 && y + photoH + 10 > 280) { doc.addPage(); y = 20 }
+          const x = margin + col * (photoW + gapX)
+          const props = doc.getImageProperties(photo.dataUrl)
+          const ratio = Math.min(photoW / props.width, photoH / props.height)
+          const w = props.width * ratio
+          const h = props.height * ratio
+          doc.addImage(photo.dataUrl, undefined, x, y, w, h)
+          doc.text(doc.splitTextToSize(photo.name || `Fotografia ${index + 1}`, photoW), x, y + h + 4)
+          if (col === 1 || index === r.photos.length - 1) y += photoH + 13
+        } catch (error) {
+          doc.text(`Impossibile inserire la fotografia: ${photo.name || index + 1}`, margin, y)
+          y += 7
+        }
+      })
+    }
     if (r.responsible?.signatureData) {
       if (y > 245) { doc.addPage(); y = 25 }
       doc.setFont('helvetica','bold'); doc.text('Firma responsabile / referente', margin, y + 5)
@@ -194,6 +228,18 @@ export default function App() {
   const openRecord = r => { setSelected(r); setScreen('detail') }
 
   return <div className="shell">
+    {showSplash && <div className="splash-screen" role="status" aria-label="Avvio San Martino">
+      <div className="splash-content">
+        <div className="splash-logos">
+          <img src="/fresenius-logo.png" alt="Fresenius" className="splash-fresenius"/>
+          <span className="splash-divider" aria-hidden="true"/>
+          <img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana" className="splash-aom"/>
+        </div>
+        <div className="splash-title">SAN MARTINO</div>
+        <div className="splash-subtitle">REPERIBILITÀ · CATENA DEL FREDDO</div>
+        <div className="splash-progress"><span/></div>
+      </div>
+    </div>}
     <header className="topbar">
       <div className="brand-lockup">
         <div className="app-mark"><Thermometer size={20}/></div>
