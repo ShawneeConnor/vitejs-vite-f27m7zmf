@@ -44,7 +44,7 @@ jobs:
         run: npm install
 
       - name: Install TypeScript
-        run: npm install --save-dev typescript
+        run: npm install --no-save typescript@5.9.3
 
       - name: Build web app
         run: npm run build
