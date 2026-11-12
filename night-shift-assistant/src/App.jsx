@@ -3,6 +3,8 @@ import { jsPDF } from 'jspdf'
 import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
+const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
+const loadDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) } catch { return null } }
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || { reports: [], reminders: [] } } catch { return { reports: [], reminders: [] } } }
 const stamp = () => new Date().toISOString()
 const fmt = value => new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
@@ -29,20 +31,51 @@ export default function App() {
   const [responsibleName, setResponsibleName] = useState('')
   const [signatureData, setSignatureData] = useState('')
   const [signatureOpen, setSignatureOpen] = useState(false)
-  const [showDone, setShowDone] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
+  const [draftLoaded, setDraftLoaded] = useState(false)
+  const [spylogBlocked, setSpylogBlocked] = useState(false)
+  const [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem('cold-chain-haptics') !== 'false')
 
   useEffect(() => {
     const timer = window.setTimeout(() => setShowSplash(false), 1750)
     return () => window.clearTimeout(timer)
   }, [])
 
-  useEffect(() => { localStorage.setItem(KEY, JSON.stringify(store)) }, [store])
-  const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 2500) }
+  useEffect(() => {
+    const draft = loadDraft()
+    if (draft) {
+      setScreen(draft.screen || 'home')
+      setStep(draft.step || 'start')
+      setTech(draft.tech || '')
+      setShiftStart(draft.shiftStart || '20:00')
+      setShiftEnd(draft.shiftEnd || '08:00')
+      setHistory(draft.history || [])
+      setAnswers(draft.answers || [])
+      setData(draft.data || { fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
+      setPhotos(draft.photos || [])
+      setPendingClose(draft.pendingClose || { outcome: 'Intervento concluso', overrides: {} })
+      setResponsiblePresent(draft.responsiblePresent || 'no')
+      setResponsibleName(draft.responsibleName || '')
+      setSignatureData(draft.signatureData || '')
+    }
+    setDraftLoaded(true)
+  }, [])
+
+  useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(store)) } catch (error) { console.error('Archivio locale pieno o non disponibile', error) } }, [store])
+  useEffect(() => {
+    if (!draftLoaded) return
+    try {
+      if (screen === 'checklist') localStorage.setItem(DRAFT_KEY, JSON.stringify({ screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData }))
+      else localStorage.removeItem(DRAFT_KEY)
+    } catch (error) { console.error('Salvataggio bozza non riuscito', error) }
+  }, [draftLoaded, screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData])
+  useEffect(() => { localStorage.setItem('cold-chain-haptics', String(hapticsEnabled)) }, [hapticsEnabled])
+  const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); if (hapticsEnabled && navigator.vibrate) navigator.vibrate([35, 25, 35]) }
+  const buzz = () => { if (hapticsEnabled && navigator.vibrate) navigator.vibrate(12) }
   const addAnswer = (question, answer, note = '') => setAnswers(old => { const item = { question, answer, note, at: stamp() }; const i = old.findIndex(a => a.question === question); if (i < 0) return [...old, item]; const copy = [...old]; copy[i] = item; return copy })
   const go = next => { setHistory(old => [...old, step]); setStep(next) }
   const backStep = () => { if (history.length) { setStep(history[history.length - 1]); setHistory(old => old.slice(0, -1)) } }
-  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart || !shiftEnd) { notify('Inserisci inizio e fine turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' }); setPhotos([]); setStep('monitor'); setScreen('checklist') }
+  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart || !shiftEnd) { notify('Inserisci inizio e fine turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' }); setPhotos([]); setSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
 
   const beginCloseReport = (outcome, overrides = {}) => {
     setPendingClose({ outcome, overrides })
@@ -98,7 +131,7 @@ export default function App() {
     setSelected({ ...record, report })
     setScreen('report')
     setStep('')
-    setShowDone(true)
+    try { localStorage.removeItem(DRAFT_KEY) } catch {}
   }
 
   function makeReport(r) {
@@ -226,6 +259,28 @@ export default function App() {
   const activeReminders = store.reminders.filter(r => !r.resolved)
   const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r) }))
   const openRecord = r => { setSelected(r); setScreen('detail') }
+  const deleteRecord = r => {
+    let adminPin = localStorage.getItem('cold-chain-admin-pin')
+    let pinJustCreated = false
+    if (!adminPin) {
+      const first = window.prompt('Primo utilizzo: imposta un PIN locale riservato al responsabile per autorizzare le cancellazioni.')
+      if (!first || first.length < 4) { notify('PIN non impostato: cancellazione annullata.'); return }
+      const confirmPin = window.prompt('Ripeti il PIN per confermarlo.')
+      if (first !== confirmPin) { notify('I PIN non coincidono.'); return }
+      adminPin = first
+      pinJustCreated = true
+      localStorage.setItem('cold-chain-admin-pin', adminPin)
+    }
+    if (!pinJustCreated) {
+      const entered = window.prompt('Inserisci il PIN del responsabile per autorizzare la cancellazione.')
+      if (entered !== adminPin) { notify('PIN non corretto. Cancellazione non autorizzata.'); return }
+    }
+    if (!window.confirm('Prima della cancellazione, assicurati di aver trasmesso tutto il lavoro svolto ai coordinatori/responsabili.\n\nVuoi eliminare definitivamente questo rapporto da questo dispositivo?')) return
+    setStore(old => ({ ...old, reports: old.reports.filter(item => item.id !== r.id) }))
+    setSelected(null)
+    setScreen('archive')
+    notify('Rapporto eliminato dall’archivio locale.')
+  }
 
   return <div className="shell">
     {showSplash && <div className="splash-screen" role="status" aria-label="Avvio San Martino">
@@ -258,14 +313,15 @@ export default function App() {
       <button className="primary big" onClick={start}><ClipboardList/> Inizia checklist <ChevronRight/></button>
       <button className="secondary" onClick={() => setScreen('archive')}><Archive/> Archivio rapporti <span className="counter">{store.reports.length}</span></button>
       <button className="secondary" onClick={() => setScreen('reminders')}><Bell/> Sonde con allarme disabilitato <span className="counter">{activeReminders.length}</span></button>
-      <p className="privacy"><ShieldCheck size={15}/> Prototipo dimostrativo: i dati sono salvati su questo dispositivo.</p>
+      <label className="haptics-setting"><input type="checkbox" checked={hapticsEnabled} onChange={e => setHapticsEnabled(e.target.checked)}/> Feedback aptico (vibrazione)</label>
+      <p className="privacy"><ShieldCheck size={15}/> I dati sono salvati su questo dispositivo. La bozza viene recuperata se l'app si chiude.</p>
     </main>}
 
     {screen === 'checklist' && <main className="page">
       <div className="checklist-actions"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Esci</button><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
       {history.length > 0 && <button className="back-step" onClick={backStep}><ArrowLeft size={16}/> Domanda precedente</button>}
       <div className="stepcount">GUIDA OPERATIVA <span>CATENA DEL FREDDO</span></div>
-      {step === 'monitor' && <Question title="Hai controllato Spylog e verificato l'escursione termica?" help="Controlla quando è iniziata e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); go('notes-monitor') }}/>} 
+      {step === 'monitor' && <Question title="Hai verificato l'allarme ricevuto su Spylog?" help="Prima di procedere, verifica l'allarme e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); setSpylogBlocked(true) }}/>} 
       {step === 'notes-monitor' && <TextStep title="Aggiungi una nota" help="Indica brevemente cosa non è stato possibile verificare." value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => go('wait')}/>}
       {step === 'wait' && <Question title="Dopo 15–30 minuti, la temperatura è rientrata?" help="Continua a monitorare Spylog durante l'attesa." onYes={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'NO'); go('call') }}/>} 
       {step === 'call' && <Question title="Hai contattato il centralino e chiesto del reparto?" help="Chiedi se è presente personale o se qualcuno sta lavorando sul frigorifero." onYes={() => { addAnswer('Contattato centralino / reparto', 'SÌ'); go('staff') }} onNo={() => { addAnswer('Contattato centralino / reparto', 'NO'); go('call-note') }}/>} 
@@ -274,8 +330,8 @@ export default function App() {
       {step === 'remote' && <Question title="La temperatura è rientrata durante il monitoraggio?" help="In genere, se il frigorifero è stato richiuso, si continua a controllare da remoto." onYes={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'NO'); go('onsite') }}/>} 
       {step === 'onsite' && <>
         <div className="question"><div className="qicon"><Thermometer/></div><h1>Intervento sul posto</h1><p>Identifica il frigorifero e la sonda / Spylog.</p></div>
-        <label className="field-label">Numero inventario del frigorifero</label><input className="input" value={data.fridge} onChange={e => setData(d => ({...d, fridge:e.target.value}))} placeholder="Inventario frigorifero"/>
-        <label className="field-label">Numero inventario della sonda / Spylog</label><input className="input" value={data.probe} onChange={e => setData(d => ({...d, probe:e.target.value}))} placeholder="Inventario sonda"/>
+        <label className="field-label">Numero inventario del frigorifero</label><input className="input" value={data.fridge} inputMode="numeric" onChange={e => setData(d => ({...d, fridge:e.target.value}))} placeholder="Inventario frigorifero"/>
+        <label className="field-label">Numero inventario della sonda / Spylog</label><input className="input" value={data.probe} inputMode="numeric" onChange={e => setData(d => ({...d, probe:e.target.value}))} placeholder="Inventario sonda"/>
         <div className="photo-box"><div><b>Foto dell'intervento</b><small>Facoltative · massimo 6 foto</small></div><label className="photo-button"><ImagePlus size={18}/> Aggiungi foto<input type="file" accept="image/*" capture="environment" multiple onChange={addPhotos} hidden/></label>{photos.length > 0 && <div className="thumbs">{photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div>
         <button className="primary" onClick={() => { if (!data.fridge.trim() || !data.probe.trim()) { notify('Inserisci entrambi i numeri inventario.'); return } go('resolved') }}>Continua <ArrowRight/></button>
       </>}
@@ -285,7 +341,7 @@ export default function App() {
       {step === 'alarm' && <Question title="È stato disabilitato qualche allarme?" help="Registra la sonda se un allarme è stato disabilitato, ad esempio durante uno sbrinamento." onYes={() => { addAnswer('È stato disabilitato qualche allarme?', 'SÌ'); go('alarm-id') }} onNo={() => { setData(d => ({...d, disabled:'no'})); addAnswer('È stato disabilitato qualche allarme?', 'NO'); beginCloseReport('Intervento concluso') }}/>} 
       {step === 'alarm-id' && <>
         <div className="question"><div className="qicon"><Bell/></div><h1>Numero inventario della sonda disabilitata</h1><p>Inserisci il numero per renderlo visibile agli altri reperibili.</p></div>
-        <input className="input" value={data.disabledInventory} onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
+        <input className="input" value={data.disabledInventory} inputMode="numeric" onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
         <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
       </>}
       {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
@@ -310,10 +366,10 @@ export default function App() {
     {screen === 'report' && selected && <main className="page"><div className="success-head"><CheckCircle2 size={34}/><h1>Rapporto generato</h1><p>L'intervento è stato registrato.</p></div><div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="thumbs">{selected.photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><div className="share-grid"><button onClick={() => shareWhatsApp(selected)}>WhatsApp</button><button onClick={() => shareTelegram(selected)}>Telegram</button></div><button className="primary" onClick={() => shareNative(selected)}>Condividi rapporto</button><p className="privacy">Il rapporto è già salvato automaticamente nell’archivio di questo dispositivo.</p><button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button></main>}
 
     {signatureOpen && <SignatureModal onSave={dataUrl => { setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
-    {showDone && screen === 'report' && <div className="modal-backdrop"><section className="info-modal done-modal"><div className="done-icon"><CheckCircle2 size={42}/></div><h2>Tutto ok, puoi riposare!</h2><p>Il rapporto tecnico è stato generato e salvato nell’archivio di questo dispositivo.</p><button className="primary" onClick={() => { setShowDone(false); setScreen('home') }}>Torna alla home</button></section></div>}
-    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Consultazione in sola lettura. I rapporti non sono modificabili.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
+    {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
+    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
@@ -321,60 +377,98 @@ export default function App() {
   </div>
 }
 
-function Question({ title, help, onYes, onNo }) { return <><div className="question"><div className="qicon"><ClipboardList/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><div className="choices"><button className="yes" onClick={onYes}><CheckCircle2/> SÌ</button><button className="no" onClick={onNo}><X/> NO</button></div></> }
+function Question({ title, help, onYes, onNo }) { const tap = fn => () => { if (localStorage.getItem('cold-chain-haptics') !== 'false' && navigator.vibrate) navigator.vibrate(12); fn?.() }; return <><div className="question"><div className="qicon"><ClipboardList/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><div className="choices"><button className="yes" onClick={tap(onYes)}><CheckCircle2/> SÌ</button><button className="no" onClick={tap(onNo)}><X/> NO</button></div></> }
 function TextStep({ title, help, value, onChange, onNext }) { return <><div className="question"><div className="qicon"><FileText/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><textarea className="textarea" value={value} onChange={e => onChange(e.target.value)} placeholder="Scrivi una breve nota..."/><button className="primary" onClick={onNext}>Continua <ArrowRight/></button></> }
 
 function SignatureModal({ onSave, onClose }) {
   const canvasRef = useRef(null)
+  const areaRef = useRef(null)
   const drawing = useRef(false)
-  const hasInk = useRef(false)
+  const strokes = useRef([])
+  const activeStroke = useRef(null)
   const [inkVisible, setInkVisible] = useState(false)
-  const point = e => {
+
+  const redraw = () => {
     const canvas = canvasRef.current
-    const rect = canvas.getBoundingClientRect()
-    return { x: (e.clientX - rect.left) * (canvas.width / rect.width), y: (e.clientY - rect.top) * (canvas.height / rect.height) }
-  }
-  const start = e => {
-    const c = canvasRef.current
-    drawing.current = true
-    c.setPointerCapture(e.pointerId)
-    const p = point(e)
-    const ctx = c.getContext('2d')
-    ctx.beginPath()
-    ctx.moveTo(p.x, p.y)
-  }
-  const move = e => {
-    if (!drawing.current) return
-    const p = point(e)
-    const ctx = canvasRef.current.getContext('2d')
-    ctx.lineWidth = 4
+    const area = areaRef.current
+    if (!canvas || !area) return
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+    canvas.width = Math.round(rect.width * dpr)
+    canvas.height = Math.round(rect.height * dpr)
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.lineWidth = 3
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.strokeStyle = '#172033'
-    ctx.lineTo(p.x, p.y)
-    ctx.stroke()
-    hasInk.current = true
-    setInkVisible(true)
+    for (const stroke of strokes.current) {
+      if (!stroke.length) continue
+      ctx.beginPath()
+      ctx.moveTo(stroke[0].x, stroke[0].y)
+      for (let i = 1; i < stroke.length; i++) ctx.lineTo(stroke[i].x, stroke[i].y)
+      if (stroke.length === 1) ctx.lineTo(stroke[0].x + 0.1, stroke[0].y + 0.1)
+      ctx.stroke()
+    }
   }
-  const end = () => { drawing.current = false }
+
+  useEffect(() => {
+    redraw()
+    const observer = typeof ResizeObserver !== 'undefined' && areaRef.current ? new ResizeObserver(redraw) : null
+    if (observer && areaRef.current) observer.observe(areaRef.current)
+    window.addEventListener('orientationchange', redraw)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('orientationchange', redraw)
+    }
+  }, [])
+
+  const point = e => {
+    const rect = canvasRef.current.getBoundingClientRect()
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+  const start = e => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas || !canvas.getContext('2d')) return
+    drawing.current = true
+    activeStroke.current = [point(e)]
+    strokes.current.push(activeStroke.current)
+    try { canvas.setPointerCapture(e.pointerId) } catch {}
+    redraw()
+    if (!inkVisible) setInkVisible(true)
+  }
+  const move = e => {
+    if (!drawing.current || !activeStroke.current) return
+    e.preventDefault()
+    activeStroke.current.push(point(e))
+    redraw()
+  }
+  const end = () => { drawing.current = false; activeStroke.current = null }
   const clear = () => {
-    const c = canvasRef.current
-    c.getContext('2d').clearRect(0, 0, c.width, c.height)
-    hasInk.current = false
+    strokes.current = []
+    drawing.current = false
+    activeStroke.current = null
     setInkVisible(false)
+    redraw()
   }
+
   return <div className="signature-overlay">
     <div className="signature-toolbar">
-      <div><b>Firma del referente</b><small>Ruota il telefono in orizzontale per firmare comodamente</small></div>
+      <div><b>Firma del referente</b><small>Puoi firmare in verticale o in orizzontale</small></div>
       <button className="secondary" onClick={onClose}>Annulla</button>
     </div>
-    <div className="signature-area">
-      <canvas ref={canvasRef} width={1600} height={480} className="signature-canvas" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end}/>
-      <span>Firma qui con il dito o con una penna touch</span>
+    <div className="signature-area" ref={areaRef}>
+      <canvas ref={canvasRef} className="signature-canvas" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}/>
+      {!inkVisible && <span>Firma qui con il dito o con una penna touch</span>}
     </div>
     <div className="signature-toolbar bottom">
       <button className="secondary" onClick={clear}>Cancella</button>
-      <button className="primary" disabled={!inkVisible} onClick={() => { if (hasInk.current) onSave(canvasRef.current.toDataURL('image/png')) }}>Conferma firma <CheckCircle2/></button>
+      <button className="primary" disabled={!inkVisible} onClick={() => { const canvas = canvasRef.current; if (canvas && inkVisible) onSave(canvas.toDataURL('image/png')) }}>Conferma firma <CheckCircle2/></button>
     </div>
   </div>
 }
