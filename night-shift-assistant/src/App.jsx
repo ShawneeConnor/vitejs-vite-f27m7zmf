@@ -332,18 +332,37 @@ export default function App() {
     }
     return doc.output('blob')
   }
-  const downloadPdf = r => {
-    const blob = createPdfBlob(r)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `rapporto-catena-freddo-${r.id}.pdf`
-    a.style.display = 'none'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
-    notify('PDF pronto per il download.')
+  const downloadPdf = async r => {
+    const filename = `rapporto-catena-freddo-${r.id}.pdf`
+    try {
+      const blob = createPdfBlob(r)
+      if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob)
+        const saved = await Filesystem.writeFile({
+          path: filename,
+          data: base64,
+          directory: Directory.Documents,
+          recursive: true,
+        })
+        notify(`PDF salvato in Documenti: ${filename}`)
+        return saved
+      }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      notify('Download PDF avviato. Controlla la cartella Download del browser.')
+      return true
+    } catch (e) {
+      console.error('Salvataggio PDF non riuscito', e)
+      notify(`Salvataggio PDF non riuscito: ${e.message || 'riprova'}`)
+      return false
+    }
   }
   const printPdf = downloadPdf
 
