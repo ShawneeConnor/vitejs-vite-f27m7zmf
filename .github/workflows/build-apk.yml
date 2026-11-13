@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - test-centro-prove-5
+      - beta-1.3
     paths:
       - 'night-shift-assistant/**'
       - '.github/workflows/build-apk.yml'
@@ -41,7 +41,7 @@ jobs:
           packages: ''
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install TypeScript
         run: npm install --no-save typescript@5.9.3
@@ -64,6 +64,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: san-martino-test-apk
+          name: san-martino-beta-1.3-apk
           path: night-shift-assistant/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
