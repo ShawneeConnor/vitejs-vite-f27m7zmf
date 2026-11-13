@@ -4,12 +4,13 @@ import { Capacitor } from '@capacitor/core'
 import { Share } from '@capacitor/share'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 import { App as CapacitorApp } from '@capacitor/app'
+import { LocalNotifications } from '@capacitor/local-notifications'
 import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake, Moon, Sun } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
 const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
 const loadDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) } catch { return null } }
-const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], ...saved, auditLogs: saved.auditLogs || [] } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
+const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], reminderIntervalHours: 6, ...saved, auditLogs: saved.auditLogs || [], reminderIntervalHours: saved.reminderIntervalHours || 6 } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
 const stamp = () => new Date().toISOString()
 const fmt = value => new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
@@ -26,7 +27,7 @@ export default function App() {
   const [history, setHistory] = useState([])
   const [showInfo, setShowInfo] = useState(false)
   const [answers, setAnswers] = useState([])
-  const [data, setData] = useState({ fridge: '', probe: '', ticket: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
+  const [data, setData] = useState({ fridge: '', probe: '', ticket: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: 6, notes: '' })
   const [photos, setPhotos] = useState([])
   const [selected, setSelected] = useState(null)
   const [toast, setToast] = useState('')
@@ -59,7 +60,7 @@ export default function App() {
       setShiftEnd(draft.shiftEnd || '')
       setHistory(draft.history || [])
       setAnswers(draft.answers || [])
-      setData(draft.data || { fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
+      setData(draft.data || { fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: 6, notes: '' })
       setPhotos(draft.photos || [])
       setPendingClose(draft.pendingClose || { outcome: 'Intervento concluso', overrides: {} })
       setResponsiblePresent(draft.responsiblePresent || 'no')
@@ -85,18 +86,20 @@ export default function App() {
   const backStep = () => { if (history.length) { setStep(history[history.length - 1]); setHistory(old => old.slice(0, -1)) } }
 
   const confirmExit = async () => {
+    const shouldExitApp = screen === 'home' || screen === 'complete'
     setExitConfirmOpen(false)
     try { localStorage.removeItem(DRAFT_KEY) } catch {}
     setScreen('home')
     setStep('start')
     setHistory([])
     setAnswers([])
+    setData({ fridge: '', probe: '', ticket: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: store.reminderIntervalHours || 6, notes: '' })
     setPhotos([])
     setShiftEnd('')
     setSignatureData('')
     setResponsiblePresent('no')
     setResponsibleName('')
-    if (Capacitor.isNativePlatform()) {
+    if (shouldExitApp && Capacitor.isNativePlatform()) {
       try { await CapacitorApp.exitApp() } catch (error) { console.error('Uscita app non riuscita', error) }
     }
   }
@@ -110,7 +113,12 @@ export default function App() {
       if (showInfo) { setShowInfo(false); return }
       if (exitConfirmOpen) { setExitConfirmOpen(false); return }
       if (screen === 'checklist') {
-        if (history.length > 0) backStep()
+        const untouchedFirstQuestion = history.length === 0 && answers.length === 0 && !data.fridge && !data.probe && !data.ticket && !data.disabledInventory && !data.notes && photos.length === 0
+        if (untouchedFirstQuestion) {
+          try { localStorage.removeItem(DRAFT_KEY) } catch {}
+          setScreen('home')
+          setStep('start')
+        } else if (history.length > 0) backStep()
         else setExitConfirmOpen(true)
         return
       }
@@ -131,7 +139,7 @@ export default function App() {
       listener?.remove()
     }
   }, [screen, history, signatureOpen, spylogBlocked, showInfo, exitConfirmOpen])
-  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' }); setPhotos([]); setSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
+  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: store.reminderIntervalHours || 6, notes: '' }); setPhotos([]); setSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
 
   const beginCloseReport = (outcome, overrides = {}) => {
     setPendingClose({ outcome, overrides })
@@ -141,7 +149,7 @@ export default function App() {
     setScreen('review')
   }
 
-  const closeReport = async (outcome, overrides = {}) => {
+  const closeReport = async (outcome, overrides = {}, shortReport = false, endTime = '') => {
     setScreen('processing')
     try {
       // Lascia il tempo alla schermata di elaborazione di apparire prima delle operazioni reali.
@@ -151,10 +159,11 @@ export default function App() {
         id: uid(),
         createdAt: stamp(),
         technician: tech.trim() || 'Tecnico non indicato',
-        shift: { start: shiftStart, end: shiftEnd },
+        shift: { start: shiftStart, end: endTime || shiftEnd },
         answers,
         outcome,
-        responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
+        responsible: { present: !shortReport && responsiblePresent === 'si', name: !shortReport && responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: !shortReport && responsiblePresent === 'si' ? signatureData : '' },
+        shortReport,
         fridgeInventory: finalData.fridge,
         probeInventory: finalData.probe,
         ticketReference: finalData.ticket?.trim() || '',
@@ -177,8 +186,9 @@ export default function App() {
         ...store,
         reports: store.reports,
         reminders: finalData.disabled === 'si' && finalData.remindDisabled === 'si'
-          ? [...store.reminders, { id: uid(), inventory: finalData.disabledInventory.trim(), createdAt: stamp(), reportId: record.id, resolved: false }]
-          : store.reminders
+          ? [...store.reminders, { id: uid(), inventory: finalData.disabledInventory.trim(), createdAt: stamp(), reportId: record.id, resolved: false, intervalHours: Number(finalData.reminderIntervalHours || store.reminderIntervalHours || 6) }]
+          : store.reminders,
+        reminderIntervalHours: Number(finalData.reminderIntervalHours || store.reminderIntervalHours || 6)
       }
       // Scrittura esplicita: la schermata verde arriva solo dopo la conferma del salvataggio locale.
       localStorage.setItem(KEY, JSON.stringify(nextStore))
@@ -212,7 +222,7 @@ export default function App() {
       `Riferimento ticket Biogest / MainSim: ${r.ticketReference || 'Non specificato'}`, 
       `Tecnico reperibile: ${r.technician}`,
       `Turno: ${r.shift?.start || '—'} – ${r.shift?.end || '—'}`,
-      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+      r.shortReport ? 'Referente e firma: non previsti per questa tipologia di intervento.' : `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
       '',
       '1. OGGETTO E CONTESTO',
       intro,
@@ -235,11 +245,13 @@ export default function App() {
       '6. DOCUMENTAZIONE',
       `Fotografie allegate: ${r.photos?.length || 0}`,
       '',
-      'FIRME',
-      `Tecnico reperibile: ${r.technician}`,
-      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
-      r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non acquisita: referente assente]',
-      '',
+      ...(r.shortReport ? [] : [
+        'FIRME',
+        `Tecnico reperibile: ${r.technician}`,
+        `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+        r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non acquisita: referente assente]',
+        ''
+      ]),
       'Documento generato automaticamente sulla base delle informazioni inserite dal tecnico. Verificare la completezza dei dati prima della sua archiviazione.'
     ]
     return lines.join('\n')
@@ -386,8 +398,49 @@ export default function App() {
   }
 
   const activeReminders = store.reminders.filter(r => !r.resolved)
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let alive = true
+    const syncNotifications = async () => {
+      try {
+        const ids = Array.from({ length: 336 }, (_, i) => ({ id: 51000 + i }))
+        await LocalNotifications.cancel({ notifications: ids })
+        try { await LocalNotifications.removeAllDeliveredNotifications() } catch {}
+        const active = store.reminders.filter(item => !item.resolved)
+        if (!active.length) return
+        const permission = await LocalNotifications.checkPermissions()
+        if (permission.display !== 'granted') return
+        const hours = Number(store.reminderIntervalHours || active[0]?.intervalHours || 6)
+        const count = active.length
+        const body = count === 1 ? 'Hai 1 sonda con allarme disabilitato. Verifica il ripristino.' : `Hai ${count} sonde con allarme disabilitato. Verifica il ripristino.`
+        const total = Math.floor((14 * 24) / hours)
+        const now = Date.now()
+        const notifications = Array.from({ length: total }, (_, index) => ({
+          id: 51000 + index,
+          title: 'Promemoria catena del freddo',
+          body,
+          schedule: { at: new Date(now + (index + 1) * hours * 60 * 60 * 1000) },
+          group: 'cold-chain-reminders',
+          groupSummary: true,
+          extra: { type: 'disabled-probes', count }
+        }))
+        if (alive && notifications.length) await LocalNotifications.schedule({ notifications })
+      } catch (error) { console.warn('Programmazione promemoria non riuscita', error) }
+    }
+    syncNotifications()
+    let appStateListener
+    CapacitorApp.addListener('appStateChange', ({ isActive }) => { if (isActive) syncNotifications() }).then(listener => { appStateListener = listener }).catch(() => {})
+    return () => { alive = false; appStateListener?.remove() }
+  }, [store.reminders, store.reminderIntervalHours])
   const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r) }))
   const openRecord = r => { setSelected(r); setScreen('detail') }
+  const isShortReportCase = () => {
+    const values = answers.map(item => item.answer)
+    const noReferentCase = values[1] === 'SÌ' && values[2] === 'NO'
+    const remoteCase = values[1] === 'NO' && values[2] === 'SÌ' && values[3] === 'SÌ' && values[4] === 'SÌ'
+    return noReferentCase || remoteCase
+  }
+
   const deleteRecord = r => {
     let adminPin = localStorage.getItem('cold-chain-admin-pin')
     let pinJustCreated = false
@@ -437,7 +490,7 @@ export default function App() {
         <div className="app-mark"><Thermometer size={20}/></div>
         <div className="brand-name"><b>Reperibilità</b><small>CATENA DEL FREDDO</small></div>
       </div>
-      {screen === 'home' ? <button className={`theme-swipe ${theme === 'dark' ? 'is-dark' : ''}`} role="switch" aria-checked={theme === 'dark'} aria-label="Attiva modalità scura" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><span className="theme-swipe-thumb">{theme === 'dark' ? <Moon size={15}/> : <Sun size={15}/>}</span><span className="theme-swipe-label">{theme === 'dark' ? 'DARK' : 'LIGHT'}</span></button> : <span className="local">● Locale</span>}
+      <button className={`theme-swipe ${theme === 'dark' ? 'is-dark' : ''}`} role="switch" aria-checked={theme === 'dark'} aria-label="Attiva modalità scura" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><span className="theme-swipe-thumb">{theme === 'dark' ? <Moon size={15}/> : <Sun size={15}/>}</span><span className="theme-swipe-label">{theme === 'dark' ? 'DARK' : 'LIGHT'}</span></button>
     </header>
     <div className="partner-logos" aria-label="Loghi istituzionali">
       <img src="/fresenius-logo.png" alt="Fresenius" className="fresenius-logo"/>
@@ -479,8 +532,8 @@ export default function App() {
 
     {screen === 'confirm-close' && <main className="page">
       <button className="back" onClick={() => setScreen('review')}><ArrowLeft size={17}/> Torna al riepilogo</button>
-      <div className="question"><div className="qicon"><CheckCircle2/></div><h1>Vuoi concludere?</h1><p>Confermando, verrà registrato automaticamente l’orario di fine intervento. Successivamente sarà richiesta la firma del referente del reparto o di un delegato.</p></div>
-      <button className="primary" onClick={() => { setShiftEnd(new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})); setStep('finalize'); setScreen('checklist') }}>Sì, continua alla firma <CheckCircle2/></button>
+      <div className="question"><div className="qicon"><CheckCircle2/></div><h1>Vuoi concludere?</h1><p>Confermando, verrà registrato automaticamente l’orario di fine intervento. In base alle risposte, l'app richiederà la firma del referente oppure genererà direttamente un rapporto tecnico contenuto.</p></div>
+      <button className="primary" onClick={() => { const end = new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}); setShiftEnd(end); if (isShortReportCase()) { setResponsiblePresent('no'); setResponsibleName(''); setSignatureData(''); closeReport(pendingClose.outcome, pendingClose.overrides, true, end) } else { setStep('finalize'); setScreen('checklist') } }}>Sì, {isShortReportCase() ? 'genera rapporto tecnico' : 'continua alla firma'} <CheckCircle2/></button>
       <button className="secondary" onClick={() => setScreen('checklist')}>No, torno all’intervento</button>
     </main>}
 
@@ -510,9 +563,13 @@ export default function App() {
       {step === 'alarm-id' && <>
         <div className="question"><div className="qicon"><Bell/></div><h1>Numero inventario della sonda disabilitata</h1><p>Inserisci il numero per renderlo visibile agli altri reperibili.</p></div>
         <input className="input" value={data.disabledInventory} inputMode="numeric" onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
+        <label className="field-label" htmlFor="reminder-interval">Quanto spesso vuoi che ti venga ricordato di riabilitare l'allarme?</label>
+        <select id="reminder-interval" className="input" value={data.reminderIntervalHours || store.reminderIntervalHours || 6} onChange={e => setData(d => ({...d, reminderIntervalHours:Number(e.target.value)}))}>
+          <option value={1}>Ogni ora</option><option value={6}>Ogni 6 ore</option><option value={12}>Ogni 12 ore</option><option value={24}>Ogni 24 ore</option>
+        </select>
         <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
       </>}
-      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
+      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={async () => { if (Capacitor.isNativePlatform()) { try { const permission = await LocalNotifications.checkPermissions(); if (permission.display !== 'granted') { const requested = await LocalNotifications.requestPermissions(); if (requested.display !== 'granted') notify('Permesso notifiche negato: i promemoria non potranno essere mostrati.') } } catch (error) { notify('Non è stato possibile verificare il permesso notifiche.') } } addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
       {step === 'finalize' && <>
         <div className="question"><div className="qicon"><FileText/></div><h1>Firma del referente</h1><p>Se il referente o un suo delegato è presente, acquisisci nome e firma. Se è assente, puoi comunque generare il rapporto registrando l’assenza.</p></div>
         <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>Referente presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>Non presente</button></div>
@@ -548,11 +605,11 @@ export default function App() {
     {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
     {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Annulla rapporto (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
-    {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true" aria-labelledby="exit-title"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2 id="exit-title">Vuoi uscire?</h2><p>{screen === 'checklist' ? 'Hai concluso l’intervento? Sei sicuro di voler uscire? Se scegli No, la bozza resterà salvata e potrai continuare.' : 'Sei sicuro di voler chiudere l’applicazione?'}</p><button className="primary" onClick={confirmExit}>Sì, esci</button><button className="secondary" onClick={() => setExitConfirmOpen(false)}>No, resta nell’app</button></section></div>}
+    {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true" aria-labelledby="exit-title"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2 id="exit-title">Vuoi uscire?</h2><p>{screen === 'checklist' ? 'Hai concluso l’intervento? Sei sicuro di voler uscire? Se scegli No, la bozza resterà salvata e potrai continuare.' : 'Sei sicuro di voler chiudere l’applicazione?'}</p><button className="primary" onClick={confirmExit}>{screen === 'checklist' ? 'Sì, torna alla Home' : 'Sì, esci'}</button><button className="secondary" onClick={() => setExitConfirmOpen(false)}>No, resta nell’app</button></section></div>}
     {toast && <div className="toast">{toast}</div>}
   </div>
 }
