@@ -309,3 +309,17 @@ html, body, #root { min-height:100%; }
 
 .page > .back { width:100%; justify-content:center; }
 :root[data-theme="dark"] select.input option { background:#101722; color:#edf3fb; }
+
+
+/* Correzioni finali Dark Mode – barra loghi e indicatori numerici */
+:root[data-theme="dark"] .partner-logos {
+  background:#101722;
+  border-bottom:1px solid #26364b;
+}
+:root[data-theme="dark"] .stepcount { color:#78adff; }
+:root[data-theme="dark"] .stepcount span { color:#c0ccdc; }
+:root[data-theme="dark"] .counter { background:#31435b; color:#f2f6fc; border:1px solid #60748f; }
+:root[data-theme="dark"] .answer-row { color:#d8e2ef; border-bottom-color:#33445a; }
+:root[data-theme="dark"] .answer-row small { color:#b5c3d5; }
+:root[data-theme="dark"] .answer-row .yes { color:#7ee0b7; }
+:root[data-theme="dark"] .answer-row .no { color:#ff9da6; }
