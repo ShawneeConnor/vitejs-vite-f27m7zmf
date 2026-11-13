@@ -11,7 +11,7 @@ import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, Che
 const KEY = 'cold-chain-assistant-v3'
 const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
 const loadDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) } catch { return null } }
-const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], reminderIntervalHours: 6, ...saved, auditLogs: saved.auditLogs || [], reminderIntervalHours: saved.reminderIntervalHours || 6 } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
+const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], reminderIntervalHours: 6, ...saved } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
 const stamp = () => new Date().toISOString()
 const fmt = value => new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
