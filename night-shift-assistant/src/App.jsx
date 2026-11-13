@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core'
 import { Share } from '@capacitor/share'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 import { App as CapacitorApp } from '@capacitor/app'
-import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake } from 'lucide-react'
+import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake, Moon, Sun } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
 const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
@@ -419,6 +419,7 @@ export default function App() {
   }
 
   return <div className="shell">
+    {transitionHome && <div className="snow-transition-overlay" aria-live="assertive"><div className="snow-transition-flake"><Snowflake size={Math.min(260, Math.max(180, window.innerWidth * 0.58))} strokeWidth={1.15}/></div><span>Preparazione nuovo intervento…</span></div>}
     {showSplash && <div className="splash-screen" role="status" aria-label="Avvio San Martino">
       <div className="splash-content">
         <div className="splash-logos">
@@ -436,7 +437,7 @@ export default function App() {
         <div className="app-mark"><Thermometer size={20}/></div>
         <div className="brand-name"><b>Reperibilità</b><small>CATENA DEL FREDDO</small></div>
       </div>
-      <span className="local">● Locale</span>
+      {screen === 'home' ? <button className={`theme-swipe ${theme === 'dark' ? 'is-dark' : ''}`} role="switch" aria-checked={theme === 'dark'} aria-label="Attiva modalità scura" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><span className="theme-swipe-thumb">{theme === 'dark' ? <Moon size={15}/> : <Sun size={15}/>}</span><span className="theme-swipe-label">{theme === 'dark' ? 'DARK' : 'LIGHT'}</span></button> : <span className="local">● Locale</span>}
     </header>
     <div className="partner-logos" aria-label="Loghi istituzionali">
       <img src="/fresenius-logo.png" alt="Fresenius" className="fresenius-logo"/>
@@ -533,7 +534,7 @@ export default function App() {
           closeReport(pendingClose.outcome, pendingClose.overrides)
         }}>Concludi e genera rapporto <CheckCircle2/></button>
       </>}
-      <label className="theme-setting">Modalità scura <input type="checkbox" checked={theme === 'dark'} onChange={e => setTheme(e.target.checked ? 'dark' : 'light')}/></label><div className="footnote">Le risposte vengono registrate nel rapporto tecnico. Il prototipo non sostituisce le procedure del servizio.</div>
+      <div className="footnote">Le risposte vengono registrate nel rapporto tecnico. Il prototipo non sostituisce le procedure del servizio.</div>
     </main>}
 
     {screen === 'report-preview' && selected && <main className="page">
@@ -547,8 +548,7 @@ export default function App() {
     {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
     {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button>
-      <button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
