@@ -241,3 +241,71 @@ body { overflow-x:hidden; }
 :root[data-theme="dark"] .signature-area{background:#fff;border-color:#6684a8}
 :root[data-theme="dark"] .signature-area span{color:#596b82}
 @media(prefers-reduced-motion:reduce){.page,.snow-transition-flake,.snow-transition-overlay>span{animation-duration:.01ms!important}}
+
+
+/* Beta 1.3 – rifiniture consolidate richieste */
+:root { --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px); }
+html, body, #root { min-height:100%; }
+.shell { padding-top:var(--safe-top); padding-bottom:var(--safe-bottom); overflow-x:hidden; }
+.topbar { top:var(--safe-top); min-height:66px; height:auto; padding-top:8px; padding-bottom:8px; gap:8px; }
+.brand-lockup { min-width:0; flex:1 1 auto; }
+.brand-name { min-width:0; }
+.theme-swipe { flex:0 0 82px; width:82px; height:34px; }
+.theme-swipe-thumb { width:26px; height:26px; }
+.theme-swipe.is-dark .theme-swipe-thumb { transform:translateX(46px); }
+.theme-swipe-label { font-size:8px; margin-left:29px; }
+.theme-swipe.is-dark .theme-swipe-label { margin-right:29px; }
+.partner-logos { gap:10px; padding:10px 18px; justify-content:center; }
+.partner-logos img { flex:0 1 43%; width:43%; max-width:43%; min-width:0; max-height:34px; object-fit:contain; }
+.partner-logos .fresenius-logo,.partner-logos .aom-logo { width:43%; max-width:43%; max-height:34px; }
+.page { padding-left:max(22px, env(safe-area-inset-left, 0px)); padding-right:max(22px, env(safe-area-inset-right, 0px)); padding-bottom:calc(40px + var(--safe-bottom)); }
+.primary,.secondary,.danger-button { justify-content:center; text-align:center; }
+.primary.big svg:last-child { margin-left:0; }
+.secondary .counter { margin-left:0; }
+.record { text-align:left; }
+.report-preview-actions,.completion-page > button { width:100%; max-width:100%; align-self:stretch; justify-content:center; }
+.choices button.yes,.choices button.no { opacity:1; }
+:root[data-theme="dark"] .choices button { color:#eaf1fa; background:#202d40; border-color:#53657d; }
+:root[data-theme="dark"] .choices button.yes { color:#d8ffec; background:#174b3c; border-color:#2d8c6d; }
+:root[data-theme="dark"] .choices button.no { color:#ffe1e4; background:#572b34; border-color:#a64d5a; }
+:root[data-theme="dark"] .choices button:not(.yes):not(.no) { color:#eaf1fa; }
+:root[data-theme="dark"] .field-label { color:#d5dfec; }
+:root[data-theme="dark"] .secondary { background:#202d40; color:#edf3fb; border-color:#43556e; }
+:root[data-theme="dark"] .record { background:#182333; color:#edf3fb; border-color:#33445a; }
+:root[data-theme="dark"] .photo-box { background:#182333; border-color:#43556e; color:#edf3fb; }
+:root[data-theme="dark"] .info-button,:root[data-theme="dark"] .back-step { background:#202d40; color:#e6effb; border-color:#43556e; }
+:root[data-theme="dark"] .rt-preview { background:#fff; color:#172033; }
+:root[data-theme="dark"] .rt-preview pre { color:#34445c; }
+:root[data-theme="dark"] .success-head h1 { color:#edf3fb; }
+:root[data-theme="dark"] .completion-page h1 { color:#edf3fb; }
+:root[data-theme="dark"] .completion-page p { color:#c0cada; }
+.snow-transition-overlay { animation:transition-overlay-in .2s ease both, transition-overlay-out 2s ease-in-out forwards; }
+.snow-transition-flake { animation:full-snow-roll 2s cubic-bezier(.42,0,.24,1) both; transform-origin:center; }
+@keyframes full-snow-roll {
+  0% { transform:translate3d(-8px,12px,0) rotate(0deg) scale(.5); opacity:0; }
+  18% { opacity:1; }
+  38% { transform:translate3d(12px,-10px,0) rotate(105deg) scale(1); }
+  68% { transform:translate3d(-10px,8px,0) rotate(245deg) scale(.96); }
+  88% { opacity:1; }
+  100% { transform:translate3d(0,-4px,0) rotate(360deg) scale(.55); opacity:0; }
+}
+@keyframes transition-overlay-out { 0%,70% { opacity:1; } 100% { opacity:0; } }
+.snowflake-processing { animation:snowflake-spin 5s ease-in-out infinite; }
+@keyframes snowflake-spin { 0% { transform:rotate(0deg); } 50% { transform:rotate(180deg); } 100% { transform:rotate(360deg); } }
+.reminder-frequency { margin-top:14px; }
+.reminder-frequency select { appearance:auto; }
+@media (max-width:380px) {
+  .topbar { padding-left:14px; padding-right:14px; }
+  .brand-name b { font-size:13px; }
+  .brand-name small { font-size:8px; letter-spacing:1px; }
+  .theme-swipe { flex-basis:76px; width:76px; }
+  .theme-swipe.is-dark .theme-swipe-thumb { transform:translateX(40px); }
+  .partner-logos { padding-left:14px; padding-right:14px; }
+  .partner-logos img,.partner-logos .fresenius-logo,.partner-logos .aom-logo { max-height:29px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .snow-transition-flake,.snow-transition-overlay,.snowflake-processing { animation-duration:.01ms!important; }
+}
+
+.page > .back { width:100%; justify-content:center; }
+:root[data-theme="dark"] select.input option { background:#101722; color:#edf3fb; }
