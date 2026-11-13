@@ -94,4 +94,419 @@ export default function App() {
       createdAt: stamp(),
       technician: tech.trim() || 'Tecnico non indicato',
       shift: { start: shiftStart, end: shiftEnd },
-          
+      answers,
+      outcome,
+      responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
+      fridgeInventory: finalData.fridge,
+      probeInventory: finalData.probe,
+      disabledAlarm: finalData.disabled === 'si'
+        ? {
+            inventory: finalData.disabledInventory.trim(),
+            reminder: finalData.remindDisabled === 'si'
+          }
+        : null,
+      notes: finalData.notes.trim(),
+      photos: photos.map(p => ({ name: p.name, dataUrl: p.dataUrl }))
+    }
+
+    const report = makeReport(record)
+
+    setStore(old => ({
+      ...old,
+      reports: [{ ...record, report }, ...old.reports],
+      reminders:
+        finalData.disabled === 'si' && finalData.remindDisabled === 'si'
+          ? [
+              ...old.reminders,
+              {
+                id: uid(),
+                inventory: finalData.disabledInventory.trim(),
+                createdAt: stamp(),
+                reportId: record.id,
+                resolved: false
+              }
+            ]
+          : old.reminders
+    }))
+
+    setSelected({ ...record, report })
+    setScreen('report-preview')
+    setStep('')
+    try { localStorage.removeItem(DRAFT_KEY) } catch {}
+  }
+
+  function makeReport(r) {
+    const intro = r.fridgeInventory
+      ? `A seguito della segnalazione relativa al frigorifero identificato con inventario ${r.fridgeInventory}, il tecnico reperibile ha effettuato le verifiche e le attività di seguito descritte.`
+      : 'A seguito della segnalazione di anomalia della catena del freddo, il tecnico reperibile ha effettuato le verifiche da remoto tramite il sistema Spylog.'
+    const checks = r.answers.map(a => `${a.question}: ${a.answer}${a.note ? ` (${a.note})` : ''}.`).join(' ')
+    const conclusion = r.outcome === 'Intervento concluso'
+      ? 'Le verifiche previste per l’intervento sono state completate. L’attività del tecnico reperibile si considera conclusa.'
+      : `Esito dell’intervento: ${r.outcome}.`
+    const lines = [
+      'FRESENIUS  |  IRCCS AZIENDA OSPEDALIERA METROPOLITANA',
+      'SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO',
+      'RAPPORTO TECNICO DI INTERVENTO',
+      '',
+      `Rapporto n.: ${r.id}`,
+      `Data e ora: ${fmt(r.createdAt)}`,
+      `Tecnico reperibile: ${r.technician}`,
+      `Turno: ${r.shift?.start || '—'} – ${r.shift?.end || '—'}`,
+      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+      '',
+      '1. OGGETTO E CONTESTO',
+      intro,
+      '',
+      '2. IDENTIFICAZIONE',
+      `Frigorifero – inventario: ${r.fridgeInventory || 'Intervento da remoto – non rilevato sul posto'}`,
+      `Sonda / Spylog – inventario: ${r.probeInventory || 'Non rilevato sul posto'}`,
+      '',
+      '3. ATTIVITÀ E VERIFICHE ESEGUITE',
+      checks || 'Verifiche registrate nella checklist operativa.',
+      '',
+      '4. ESITO E AZIONI CONSEGUENTI',
+      conclusion,
+      r.disabledAlarm ? `È stata segnalata la disabilitazione dell’allarme della sonda INV ${r.disabledAlarm.inventory}. Promemoria di ripristino richiesto: ${r.disabledAlarm.reminder ? 'SÌ' : 'NO'}.` : 'Non risultano allarmi disabilitati dichiarati.',
+      '',
+      '5. COMUNICAZIONI E NOTE',
+      r.notes || 'Non sono state inserite ulteriori annotazioni.',
+      '',
+      '6. DOCUMENTAZIONE',
+      `Fotografie allegate: ${r.photos?.length || 0}`,
+      '',
+      'FIRME',
+      `Tecnico reperibile: ${r.technician}`,
+      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+      r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non prevista]',
+      '',
+      'Documento generato automaticamente sulla base delle informazioni inserite dal tecnico. Verificare la completezza dei dati prima della sua archiviazione.'
+    ]
+    return lines.join('\n')
+  }
+
+  const shareText = r => { const text = `Rapporto catena del freddo\n${fmt(r.createdAt)}\nTecnico: ${r.technician}\nTurno: ${r.shift?.start || '—'}–${r.shift?.end || '—'}\nEsito: ${r.outcome}\nFrigo INV: ${r.fridgeInventory || 'n/d'}\nSonda INV: ${r.probeInventory || 'n/d'}`; return text }
+  const shareWhatsApp = r => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
+  const shareTelegram = r => window.open(`https://t.me/share/url?url=&text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
+  const shareNative = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({ title:'Rapporto catena del freddo', files:[file], text:shareText(r) }); else { printPdf(r); notify('Apri il PDF e allegalo dalla cartella Download.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione non disponibile su questo dispositivo.'); } }
+  const downloadText = r => {
+    const blob = new Blob([r.report], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.txt`; a.click(); URL.revokeObjectURL(url)
+  }
+  const createPdfBlob = r => {
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+    const margin = 17
+    doc.setFillColor(255,255,255); doc.rect(0, 0, 210, 48, 'F')
+    doc.addImage(FRESENIUS_LOGO, 'PNG', margin, 7, 65, 10)
+    doc.addImage(AOM_LOGO, 'PNG', 126, 5, 67, 21)
+    doc.setTextColor(25,39,60); doc.setFont('helvetica','bold'); doc.setFontSize(8)
+    doc.text('SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO', margin, 33)
+    doc.setFontSize(15); doc.text('RAPPORTO TECNICO DI INTERVENTO', margin, 41)
+    doc.setDrawColor(35,105,190); doc.setLineWidth(0.7); doc.line(margin,46,193,46)
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(45,58,76)
+    const lines = doc.splitTextToSize(r.report, 176)
+    let y = 54
+    lines.forEach(line => {
+      if (y > 275) { doc.addPage(); y = 20 }
+      doc.text(line, margin, y); y += 4.7
+    })
+    if (r.photos?.length) {
+      if (y > 255) { doc.addPage(); y = 20 }
+      y += 7
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+      doc.text('FOTOGRAFIE ALLEGATE', margin, y)
+      y += 8
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
+      const photoW = 82
+      const photoH = 58
+      const gapX = 10
+      r.photos.forEach((photo, index) => {
+        try {
+          const col = index % 2
+          if (col === 0 && y + photoH + 10 > 280) { doc.addPage(); y = 20 }
+          const x = margin + col * (photoW + gapX)
+          const props = doc.getImageProperties(photo.dataUrl)
+          const ratio = Math.min(photoW / props.width, photoH / props.height)
+          const w = props.width * ratio
+          const h = props.height * ratio
+          doc.addImage(photo.dataUrl, undefined, x, y, w, h)
+          doc.text(doc.splitTextToSize(photo.name || `Fotografia ${index + 1}`, photoW), x, y + h + 4)
+          if (col === 1 || index === r.photos.length - 1) y += photoH + 13
+        } catch (error) {
+          doc.text(`Impossibile inserire la fotografia: ${photo.name || index + 1}`, margin, y)
+          y += 7
+        }
+      })
+    }
+    if (r.responsible?.signatureData) {
+      if (y > 245) { doc.addPage(); y = 25 }
+      doc.setFont('helvetica','bold'); doc.text('Firma responsabile / referente', margin, y + 5)
+      doc.addImage(r.responsible.signatureData, 'PNG', margin, y + 8, 65, 24)
+    }
+    return doc.output('blob')
+  }
+  const printPdf = r => {
+    const blob = createPdfBlob(r); const url = URL.createObjectURL(blob)
+    const w = window.open(url, '_blank')
+    if (!w) { const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.pdf`; a.click(); notify('PDF scaricato.'); }
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+  }
+
+  const addPhotos = async e => {
+    const files = Array.from(e.target.files || [])
+    const converted = await Promise.all(files.map(file => new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve({ name: file.name, dataUrl: reader.result }); reader.readAsDataURL(file) })))
+    setPhotos(old => [...old, ...converted].slice(0, 6)); e.target.value = ''
+  }
+
+  const activeReminders = store.reminders.filter(r => !r.resolved)
+  const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r) }))
+  const openRecord = r => { setSelected(r); setScreen('detail') }
+  const deleteRecord = r => {
+    let adminPin = localStorage.getItem('cold-chain-admin-pin')
+    let pinJustCreated = false
+    if (!adminPin) {
+      const first = window.prompt('Primo utilizzo: imposta un PIN locale riservato al responsabile per autorizzare le cancellazioni.')
+      if (!first || first.length < 4) { notify('PIN non impostato: cancellazione annullata.'); return }
+      const confirmPin = window.prompt('Ripeti il PIN per confermarlo.')
+      if (first !== confirmPin) { notify('I PIN non coincidono.'); return }
+      adminPin = first
+      pinJustCreated = true
+      localStorage.setItem('cold-chain-admin-pin', adminPin)
+    }
+    if (!pinJustCreated) {
+      const entered = window.prompt('Inserisci il PIN del responsabile per autorizzare la cancellazione.')
+      if (entered !== adminPin) { notify('PIN non corretto. Cancellazione non autorizzata.'); return }
+    }
+    if (!window.confirm('Prima della cancellazione, assicurati di aver trasmesso tutto il lavoro svolto ai coordinatori/responsabili.\n\nVuoi eliminare definitivamente questo rapporto da questo dispositivo?')) return
+    setStore(old => ({ ...old, reports: old.reports.filter(item => item.id !== r.id) }))
+    setSelected(null)
+    setScreen('archive')
+    notify('Rapporto eliminato dall’archivio locale.')
+  }
+
+  return <div className="shell">
+    {showSplash && <div className="splash-screen" role="status" aria-label="Avvio San Martino">
+      <div className="splash-content">
+        <div className="splash-logos">
+          <img src="/fresenius-logo.png" alt="Fresenius" className="splash-fresenius"/>
+          <span className="splash-divider" aria-hidden="true"/>
+          <img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana" className="splash-aom"/>
+        </div>
+        <div className="splash-title">SAN MARTINO</div>
+        <div className="splash-subtitle">REPERIBILITÀ · CATENA DEL FREDDO</div>
+        <div className="splash-progress"><span/></div>
+      </div>
+    </div>}
+    <header className="topbar">
+      <div className="brand-lockup">
+        <div className="app-mark"><Thermometer size={20}/></div>
+        <div className="brand-name"><b>Reperibilità</b><small>CATENA DEL FREDDO</small></div>
+      </div>
+      <span className="local">● Locale</span>
+    </header>
+    <div className="partner-logos" aria-label="Loghi istituzionali">
+      <img src="/fresenius-logo.png" alt="Fresenius" className="fresenius-logo"/>
+      <img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana" className="aom-logo"/>
+    </div>
+    {screen === 'home' && <main className="page">
+      <div className="hero"><span className="eyebrow">ASSISTENTE OPERATIVO</span><h1>Intervento<br/>notturno</h1><p>Una domanda alla volta. I passaggi essenziali, senza complicazioni.</p></div>
+      <label className="field-label">Tecnico reperibile</label><input className="input" value={tech} onChange={e => setTech(e.target.value)} placeholder="Nome e cognome" />
+      <label className="field-label">Inizio turno</label><input className="input" type="time" value={shiftStart} onChange={e => setShiftStart(e.target.value)}/>
+      <button className="primary big" onClick={start}><ClipboardList/> Inizia checklist <ChevronRight/></button>
+      <button className="secondary" onClick={() => setScreen('archive')}><Archive/> Archivio rapporti <span className="counter">{store.reports.length}</span></button>
+      <button className="secondary" onClick={() => setScreen('reminders')}><Bell/> Sonde con allarme disabilitato <span className="counter">{activeReminders.length}</span></button>
+      <label className="haptics-setting"><input type="checkbox" checked={hapticsEnabled} onChange={e => setHapticsEnabled(e.target.checked)}/> Feedback aptico (vibrazione)</label>
+      <p className="privacy"><ShieldCheck size={15}/> I dati sono salvati su questo dispositivo. La bozza viene recuperata se l'app si chiude.</p>
+    </main>}
+
+    {screen === 'review' && <main className="page">
+      <button className="back" onClick={() => setScreen('checklist')}><ArrowLeft size={17}/> Torna alla checklist</button>
+      <div className="question"><div className="qicon"><FileText/></div><h1>Riepilogo intervento</h1><p>Controlla le risposte e i dati raccolti prima di procedere alla chiusura.</p></div>
+      <div className="report-card"><b>Attività e verifiche</b><div className="answers">{answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div>
+        <p><b>Tecnico:</b> {tech}</p><p><b>Inizio turno:</b> {shiftStart}</p><p><b>Frigorifero INV:</b> {data.fridge || 'Non rilevato'}</p><p><b>Sonda INV:</b> {data.probe || 'Non rilevata'}</p><p><b>Note:</b> {data.notes || 'Nessuna'}</p><p><b>Fotografie:</b> {photos.length}</p></div>
+      <button className="primary" onClick={() => setScreen('confirm-close')}>Procedi alla conferma <ArrowRight/></button>
+    </main>}
+
+    {screen === 'confirm-close' && <main className="page">
+      <button className="back" onClick={() => setScreen('review')}><ArrowLeft size={17}/> Torna al riepilogo</button>
+      <div className="question"><div className="qicon"><CheckCircle2/></div><h1>Vuoi concludere?</h1><p>Confermando, verrà registrato automaticamente l’orario di fine intervento. Successivamente sarà richiesta la firma del referente del reparto o di un delegato.</p></div>
+      <button className="primary" onClick={() => { setShiftEnd(new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})); setStep('finalize'); setScreen('checklist') }}>Sì, continua alla firma <CheckCircle2/></button>
+      <button className="secondary" onClick={() => setScreen('checklist')}>No, torno all’intervento</button>
+    </main>}
+
+    {screen === 'checklist' && <main className="page">
+      <div className="checklist-actions"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Esci</button><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
+      {history.length > 0 && <button className="back-step" onClick={backStep}><ArrowLeft size={16}/> Domanda precedente</button>}
+      <div className="stepcount">GUIDA OPERATIVA <span>CATENA DEL FREDDO</span></div>
+      {step === 'monitor' && <Question title="Hai verificato l'allarme ricevuto su Spylog?" help="Prima di procedere, verifica l'allarme e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); setSpylogBlocked(true) }}/>} 
+      {step === 'notes-monitor' && <TextStep title="Aggiungi una nota" help="Indica brevemente cosa non è stato possibile verificare." value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => go('wait')}/>}
+      {step === 'wait' && <Question title="Dopo 15–30 minuti, la temperatura è rientrata?" help="Continua a monitorare Spylog durante l'attesa." onYes={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'NO'); go('call') }}/>} 
+      {step === 'call' && <Question title="Hai contattato il centralino e chiesto del reparto?" help="Chiedi se è presente personale o se qualcuno sta lavorando sul frigorifero." onYes={() => { addAnswer('Contattato centralino / reparto', 'SÌ'); go('staff') }} onNo={() => { addAnswer('Contattato centralino / reparto', 'NO'); go('call-note') }}/>} 
+      {step === 'call-note' && <TextStep title="Perché non è stato possibile contattare il reparto?" value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => go('onsite')}/>}
+      {step === 'staff' && <Question title="C'è qualcuno che sta lavorando sul frigorifero?" help="Se la porta è stata richiusa, continua a verificare Spylog da remoto." onYes={() => { addAnswer('Personale al lavoro sul frigorifero', 'SÌ'); go('remote') }} onNo={() => { addAnswer('Personale al lavoro sul frigorifero', 'NO'); go('onsite') }}/>} 
+      {step === 'remote' && <Question title="La temperatura è rientrata durante il monitoraggio?" help="In genere, se il frigorifero è stato richiuso, si continua a controllare da remoto." onYes={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'NO'); go('onsite') }}/>} 
+      {step === 'onsite' && <>
+        <div className="question"><div className="qicon"><Thermometer/></div><h1>Intervento sul posto</h1><p>Identifica il frigorifero e la sonda / Spylog.</p></div>
+        <label className="field-label">Numero inventario del frigorifero</label><input className="input" value={data.fridge} inputMode="numeric" onChange={e => setData(d => ({...d, fridge:e.target.value}))} placeholder="Inventario frigorifero"/>
+        <label className="field-label">Numero inventario della sonda / Spylog</label><input className="input" value={data.probe} inputMode="numeric" onChange={e => setData(d => ({...d, probe:e.target.value}))} placeholder="Inventario sonda"/>
+        <div className="photo-box"><div><b>Foto dell'intervento</b><small>Facoltative · massimo 6 foto</small></div><label className="photo-button"><ImagePlus size={18}/> Aggiungi foto<input type="file" accept="image/*" capture="environment" multiple onChange={addPhotos} hidden/></label>{photos.length > 0 && <div className="thumbs">{photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div>
+        <button className="primary" onClick={() => { if (!data.fridge.trim() || !data.probe.trim()) { notify('Inserisci entrambi i numeri inventario.'); return } go('resolved') }}>Continua <ArrowRight/></button>
+      </>}
+      {step === 'resolved' && <Question title="Il problema è stato risolto?" help="Se il frigorifero non riparte, avvisa i responsabili per lo spostamento dei farmaci." onYes={() => { addAnswer('Problema risolto sul posto', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Problema risolto sul posto', 'NO'); go('notify') }}/>} 
+      {step === 'notify' && <Question title="Hai avvisato Ingegneria Clinica e gli eventuali responsabili che i farmaci devono essere spostati?" help="Lo spostamento non è gestito dal tecnico reperibile. Dopo la comunicazione, il tuo intervento è concluso." onYes={() => { addAnswer('Comunicati necessità di spostamento farmaci ai responsabili', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Comunicati necessità di spostamento farmaci ai responsabili', 'NO'); go('notify-note') }}/>} 
+      {step === 'notify-note' && <TextStep title="A chi devi ancora comunicare la necessità di spostamento?" value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => { addAnswer('Comunicazione non completata', 'NO', data.notes); go('alarm') }}/>} 
+      {step === 'alarm' && <Question title="È stato disabilitato qualche allarme?" help="Registra la sonda se un allarme è stato disabilitato, ad esempio durante uno sbrinamento." onYes={() => { addAnswer('È stato disabilitato qualche allarme?', 'SÌ'); go('alarm-id') }} onNo={() => { setData(d => ({...d, disabled:'no'})); addAnswer('È stato disabilitato qualche allarme?', 'NO'); beginCloseReport('Intervento concluso') }}/>} 
+      {step === 'alarm-id' && <>
+        <div className="question"><div className="qicon"><Bell/></div><h1>Numero inventario della sonda disabilitata</h1><p>Inserisci il numero per renderlo visibile agli altri reperibili.</p></div>
+        <input className="input" value={data.disabledInventory} inputMode="numeric" onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
+        <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
+      </>}
+      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
+      {step === 'finalize' && <>
+        <div className="question"><div className="qicon"><FileText/></div><h1>Firma del referente</h1><p>È necessaria la firma del referente tecnico del reparto o di un suo delegato per concludere l’intervento.</p></div>
+        <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>Referente presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>Non presente</button></div>
+        {responsiblePresent === 'si' && <>
+          <label className="field-label">Nome e cognome del referente</label>
+          <input className="input" value={responsibleName} onChange={e => setResponsibleName(e.target.value)} placeholder="Nome e cognome"/>
+          <label className="field-label">Firma del referente (obbligatoria)</label>
+          <button className="secondary" onClick={() => setSignatureOpen(true)}>Apri area firma a schermo intero</button>
+          {signatureData && <div className="signature-preview"><img src={signatureData} alt="Firma acquisita"/><small>Firma acquisita</small></div>}
+        </>}
+        <button className="primary" onClick={() => {
+          if (responsiblePresent !== 'si') { notify('Per concludere è necessaria la presenza del referente o di un delegato.'); return }
+          if (!responsibleName.trim()) { notify('Inserisci nome e cognome del referente.'); return }
+          if (!signatureData) { notify('Acquisisci la firma del referente prima di concludere.'); return }
+          closeReport(pendingClose.outcome, pendingClose.overrides)
+        }}>Concludi e genera rapporto <CheckCircle2/></button>
+      </>}
+      <div className="footnote">Le risposte vengono registrate nel rapporto tecnico. Il prototipo non sostituisce le procedure del servizio.</div>
+    </main>}
+
+    {screen === 'report-preview' && selected && <main className="page">
+      <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Il rapporto è stato registrato nell’archivio locale.</p></div>
+      <div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><p><b>Referente:</b> {selected.responsible?.name}</p><p><b>Fine intervento:</b> {selected.shift?.end || '—'}</p></div>
+      <button className="primary" onClick={() => setShareMenuOpen(v => !v)}>Condividi <Download/></button>
+      {shareMenuOpen && <><button className="secondary" onClick={() => { setShareMenuOpen(false); shareNative(selected) }}><FileText/> Condividi PDF</button><button className="secondary" onClick={() => { setShareMenuOpen(false); downloadText(selected) }}><FileText/> Scarica TXT</button></>}
+      <button className="secondary" onClick={() => setScreen('report-rt')}><FileText/> Visualizza RT</button>
+      <p className="privacy">Il rapporto completo, con intestazione e firma, è consultabile nella visualizzazione RT.</p>
+      <button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button>
+    </main>}
+
+    {screen === 'report-rt' && selected && <main className="page">
+      <button className="back" onClick={() => setScreen('report-preview')}><ArrowLeft size={17}/> Torna al rapporto</button>
+      <div className="report-card rt-preview"><div className="rt-letterhead"><div className="rt-logos"><img src="/fresenius-logo.png" alt="Fresenius"/><img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana"/></div><b>SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO</b><h2>RAPPORTO TECNICO DI INTERVENTO</h2></div><pre>{selected.report}</pre>{selected.responsible?.signatureData && <div className="rt-signature"><b>Firma del referente</b><img src={selected.responsible.signatureData} alt="Firma del referente"/></div>}{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{`Foto ${i+1} – ${p.name}`}</figcaption></figure>)}</div>}</div>
+      <button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button>
+    </main>}
+
+    {signatureOpen && <SignatureModal onSave={dataUrl => { setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
+    {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
+    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
+
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
+
+    {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
+    {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
+    {toast && <div className="toast">{toast}</div>}
+  </div>
+}
+
+function Question({ title, help, onYes, onNo }) { const tap = fn => () => { if (localStorage.getItem('cold-chain-haptics') !== 'false' && navigator.vibrate) navigator.vibrate(12); fn?.() }; return <><div className="question"><div className="qicon"><ClipboardList/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><div className="choices"><button className="yes" onClick={tap(onYes)}><CheckCircle2/> SÌ</button><button className="no" onClick={tap(onNo)}><X/> NO</button></div></> }
+function TextStep({ title, help, value, onChange, onNext }) { return <><div className="question"><div className="qicon"><FileText/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><textarea className="textarea" value={value} onChange={e => onChange(e.target.value)} placeholder="Scrivi una breve nota..."/><button className="primary" onClick={onNext}>Continua <ArrowRight/></button></> }
+
+function SignatureModal({ onSave, onClose }) {
+  const canvasRef = useRef(null)
+  const areaRef = useRef(null)
+  const drawing = useRef(false)
+  const strokes = useRef([])
+  const activeStroke = useRef(null)
+  const [inkVisible, setInkVisible] = useState(false)
+  const [isLandscape, setIsLandscape] = useState(() => window.innerWidth > window.innerHeight)
+
+  const redraw = () => {
+    const canvas = canvasRef.current
+    const area = areaRef.current
+    if (!canvas || !area) return
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+    canvas.width = Math.round(rect.width * dpr)
+    canvas.height = Math.round(rect.height * dpr)
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.lineWidth = 3
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.strokeStyle = '#172033'
+    for (const stroke of strokes.current) {
+      if (!stroke.length) continue
+      ctx.beginPath()
+      ctx.moveTo(stroke[0].x, stroke[0].y)
+      for (let i = 1; i < stroke.length; i++) ctx.lineTo(stroke[i].x, stroke[i].y)
+      if (stroke.length === 1) ctx.lineTo(stroke[0].x + 0.1, stroke[0].y + 0.1)
+      ctx.stroke()
+    }
+  }
+
+  useEffect(() => {
+    const updateOrientation = () => setIsLandscape(window.innerWidth > window.innerHeight)
+    window.addEventListener('resize', updateOrientation)
+    window.addEventListener('orientationchange', updateOrientation)
+    redraw()
+    const observer = typeof ResizeObserver !== 'undefined' && areaRef.current ? new ResizeObserver(redraw) : null
+    if (observer && areaRef.current) observer.observe(areaRef.current)
+    window.addEventListener('orientationchange', redraw)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('orientationchange', redraw)
+      window.removeEventListener('resize', updateOrientation)
+      window.removeEventListener('orientationchange', updateOrientation)
+    }
+  }, [isLandscape])
+
+  const point = e => {
+    const rect = canvasRef.current.getBoundingClientRect()
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+  const start = e => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas || !canvas.getContext('2d')) return
+    drawing.current = true
+    activeStroke.current = [point(e)]
+    strokes.current.push(activeStroke.current)
+    try { canvas.setPointerCapture(e.pointerId) } catch {}
+    redraw()
+    if (!inkVisible) setInkVisible(true)
+  }
+  const move = e => {
+    if (!drawing.current || !activeStroke.current) return
+    e.preventDefault()
+    activeStroke.current.push(point(e))
+    redraw()
+  }
+  const end = () => { drawing.current = false; activeStroke.current = null }
+  const clear = () => {
+    strokes.current = []
+    drawing.current = false
+    activeStroke.current = null
+    setInkVisible(false)
+    redraw()
+  }
+
+  return <div className="signature-overlay">
+    <div className="signature-toolbar">
+      <div><b>Firma del referente</b><small>Ruota il dispositivo in orizzontale per acquisire la firma</small></div>
+      <button className="secondary" onClick={onClose}>Annulla</button>
+    </div>
+    {isLandscape ? <div className="signature-area" ref={areaRef}>
+      <canvas ref={canvasRef} className="signature-canvas" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}/>
+      {!inkVisible && <span>Firma qui con il dito o con una penna touch</span>}
+    </div> : <div className="signature-rotate-notice"><b>Ruota il dispositivo</b><span>La firma può essere acquisita solo in modalità orizzontale.</span></div>}
+    <div className="signature-toolbar bottom">
+      <button className="secondary" onClick={clear}>Cancella</button>
+      <button className="primary" disabled={!inkVisible || !isLandscape} onClick={() => { const canvas = canvasRef.current; if (canvas && inkVisible) onSave(canvas.toDataURL('image/png')) }}>Conferma firma <CheckCircle2/></button>
+    </div>
+  </div>
+}
