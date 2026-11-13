@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsPDF } from 'jspdf'
-import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X } from 'lucide-react'
+import { Capacitor } from '@capacitor/core'
+import { Share } from '@capacitor/share'
+import { Filesystem, Directory } from '@capacitor/filesystem'
+import { App as CapacitorApp } from '@capacitor/app'
+import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
 const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
 const loadDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) } catch { return null } }
-const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || { reports: [], reminders: [] } } catch { return { reports: [], reminders: [] } } }
+const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], ...saved, auditLogs: saved.auditLogs || [] } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
 const stamp = () => new Date().toISOString()
 const fmt = value => new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
@@ -35,6 +39,7 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true)
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [spylogBlocked, setSpylogBlocked] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [hapticsEnabled, setHapticsEnabled] = useState(() => localStorage.getItem('cold-chain-haptics') !== 'false')
 
   useEffect(() => {
@@ -66,7 +71,7 @@ export default function App() {
   useEffect(() => {
     if (!draftLoaded) return
     try {
-      if (screen === 'checklist') localStorage.setItem(DRAFT_KEY, JSON.stringify({ screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData }))
+      if (screen === 'checklist' || screen === 'processing') localStorage.setItem(DRAFT_KEY, JSON.stringify({ screen: 'checklist', step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData }))
       else localStorage.removeItem(DRAFT_KEY)
     } catch (error) { console.error('Salvataggio bozza non riuscito', error) }
   }, [draftLoaded, screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData])
@@ -76,6 +81,55 @@ export default function App() {
   const addAnswer = (question, answer, note = '') => setAnswers(old => { const item = { question, answer, note, at: stamp() }; const i = old.findIndex(a => a.question === question); if (i < 0) return [...old, item]; const copy = [...old]; copy[i] = item; return copy })
   const go = next => { setHistory(old => [...old, step]); setStep(next) }
   const backStep = () => { if (history.length) { setStep(history[history.length - 1]); setHistory(old => old.slice(0, -1)) } }
+
+  const confirmExit = async () => {
+    setExitConfirmOpen(false)
+    try { localStorage.removeItem(DRAFT_KEY) } catch {}
+    setScreen('home')
+    setStep('start')
+    setHistory([])
+    setAnswers([])
+    setPhotos([])
+    setShiftEnd('')
+    setSignatureData('')
+    setResponsiblePresent('no')
+    setResponsibleName('')
+    if (Capacitor.isNativePlatform()) {
+      try { await CapacitorApp.exitApp() } catch (error) { console.error('Uscita app non riuscita', error) }
+    }
+  }
+
+  useEffect(() => {
+    let listener
+    let active = true
+    const handleBack = () => {
+      if (signatureOpen) { setSignatureOpen(false); return }
+      if (spylogBlocked) { setSpylogBlocked(false); return }
+      if (showInfo) { setShowInfo(false); return }
+      if (exitConfirmOpen) { setExitConfirmOpen(false); return }
+      if (screen === 'checklist') {
+        if (history.length > 0) backStep()
+        else setExitConfirmOpen(true)
+        return
+      }
+      if (screen === 'review') { setScreen('checklist'); return }
+      if (screen === 'confirm-close') { setScreen('review'); return }
+      if (screen === 'report-rt') { setScreen('report-preview'); return }
+      if (screen === 'complete') { setScreen('report-preview'); return }
+      if (screen === 'processing') return
+      if (screen === 'report-preview' || screen === 'archive' || screen === 'reminders') { setScreen('home'); return }
+      if (screen === 'detail') { setScreen('archive'); return }
+      setExitConfirmOpen(true)
+    }
+    CapacitorApp.addListener('backButton', handleBack).then(h => {
+      if (active) listener = h
+      else h.remove()
+    }).catch(error => console.error('Listener tasto indietro non disponibile', error))
+    return () => {
+      active = false
+      listener?.remove()
+    }
+  }, [screen, history, signatureOpen, spylogBlocked, showInfo, exitConfirmOpen])
   const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' }); setPhotos([]); setSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
 
   const beginCloseReport = (outcome, overrides = {}) => {
@@ -86,53 +140,56 @@ export default function App() {
     setScreen('review')
   }
 
-  const closeReport = (outcome, overrides = {}) => {
-    const finalData = { ...data, ...overrides }
+  const closeReport = async (outcome, overrides = {}) => {
+    setScreen('processing')
+    try {
+      // Lascia il tempo alla schermata di elaborazione di apparire prima delle operazioni reali.
+      await new Promise(resolve => window.setTimeout(resolve, 180))
+      const finalData = { ...data, ...overrides }
+      const record = {
+        id: uid(),
+        createdAt: stamp(),
+        technician: tech.trim() || 'Tecnico non indicato',
+        shift: { start: shiftStart, end: shiftEnd },
+        answers,
+        outcome,
+        responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
+        fridgeInventory: finalData.fridge,
+        probeInventory: finalData.probe,
+        disabledAlarm: finalData.disabled === 'si'
+          ? { inventory: finalData.disabledInventory.trim(), reminder: finalData.remindDisabled === 'si' }
+          : null,
+        notes: finalData.notes.trim(),
+        photos: photos.map(p => ({ name: p.name, dataUrl: p.dataUrl }))
+      }
+      const report = makeReport(record)
+      const completed = { ...record, report }
 
-    const record = {
-      id: uid(),
-      createdAt: stamp(),
-      technician: tech.trim() || 'Tecnico non indicato',
-      shift: { start: shiftStart, end: shiftEnd },
-      answers,
-      outcome,
-      responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
-      fridgeInventory: finalData.fridge,
-      probeInventory: finalData.probe,
-      disabledAlarm: finalData.disabled === 'si'
-        ? {
-            inventory: finalData.disabledInventory.trim(),
-            reminder: finalData.remindDisabled === 'si'
-          }
-        : null,
-      notes: finalData.notes.trim(),
-      photos: photos.map(p => ({ name: p.name, dataUrl: p.dataUrl }))
+      // Genera davvero il PDF prima di mostrare il completamento: include foto e firma, se presenti.
+      const pdfBlob = createPdfBlob(completed)
+      if (!(pdfBlob instanceof Blob) || pdfBlob.size < 500 || pdfBlob.type !== 'application/pdf') {
+        throw new Error('Il PDF non è stato generato correttamente. La bozza è stata conservata.')
+      }
+
+      const nextStore = {
+        ...store,
+        reports: [completed, ...store.reports],
+        reminders: finalData.disabled === 'si' && finalData.remindDisabled === 'si'
+          ? [...store.reminders, { id: uid(), inventory: finalData.disabledInventory.trim(), createdAt: stamp(), reportId: record.id, resolved: false }]
+          : store.reminders
+      }
+      // Scrittura esplicita: la schermata verde arriva solo dopo la conferma del salvataggio locale.
+      localStorage.setItem(KEY, JSON.stringify(nextStore))
+      setStore(nextStore)
+      setSelected(completed)
+      setStep('')
+      localStorage.removeItem(DRAFT_KEY)
+      setScreen('complete')
+    } catch (error) {
+      console.error('Conclusione intervento non riuscita', error)
+      setScreen('checklist')
+      notify(`Non posso confermare il completamento: ${error.message || 'errore durante il salvataggio'}`)
     }
-
-    const report = makeReport(record)
-
-    setStore(old => ({
-      ...old,
-      reports: [{ ...record, report }, ...old.reports],
-      reminders:
-        finalData.disabled === 'si' && finalData.remindDisabled === 'si'
-          ? [
-              ...old.reminders,
-              {
-                id: uid(),
-                inventory: finalData.disabledInventory.trim(),
-                createdAt: stamp(),
-                reportId: record.id,
-                resolved: false
-              }
-            ]
-          : old.reminders
-    }))
-
-    setSelected({ ...record, report })
-    setScreen('report-preview')
-    setStep('')
-    try { localStorage.removeItem(DRAFT_KEY) } catch {}
   }
 
   function makeReport(r) {
@@ -177,7 +234,7 @@ export default function App() {
       'FIRME',
       `Tecnico reperibile: ${r.technician}`,
       `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
-      r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non prevista]',
+      r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non acquisita: referente assente]',
       '',
       'Documento generato automaticamente sulla base delle informazioni inserite dal tecnico. Verificare la completezza dei dati prima della sua archiviazione.'
     ]
@@ -187,7 +244,38 @@ export default function App() {
   const shareText = r => { const text = `Rapporto catena del freddo\n${fmt(r.createdAt)}\nTecnico: ${r.technician}\nTurno: ${r.shift?.start || '—'}–${r.shift?.end || '—'}\nEsito: ${r.outcome}\nFrigo INV: ${r.fridgeInventory || 'n/d'}\nSonda INV: ${r.probeInventory || 'n/d'}`; return text }
   const shareWhatsApp = r => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
   const shareTelegram = r => window.open(`https://t.me/share/url?url=&text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
-  const shareNative = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({ title:'Rapporto catena del freddo', files:[file], text:shareText(r) }); else { printPdf(r); notify('Apri il PDF e allegalo dalla cartella Download.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione non disponibile su questo dispositivo.'); } }
+  const blobToBase64 = blob => new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const result = String(reader.result || '')
+      const comma = result.indexOf(',')
+      if (comma < 0) reject(new Error('Conversione PDF non riuscita'))
+      else resolve(result.slice(comma + 1))
+    }
+    reader.onerror = () => reject(reader.error || new Error('Lettura PDF non riuscita'))
+    reader.readAsDataURL(blob)
+  })
+  const shareNative = async r => {
+    try {
+      const blob = createPdfBlob(r)
+      const filename = `rapporto-catena-freddo-${r.id}.pdf`
+      if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob)
+        const saved = await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Cache, recursive: true })
+        await Share.share({ title: 'Rapporto tecnico – Catena del freddo', text: shareText(r), files: [saved.uri], dialogTitle: 'Condividi rapporto PDF' })
+        return
+      }
+      const file = new File([blob], filename, { type: 'application/pdf' })
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: 'Rapporto tecnico – Catena del freddo', files: [file], text: shareText(r) })
+      } else {
+        downloadPdf(r)
+        notify('PDF scaricato. Puoi allegarlo da Download.')
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') notify(`Condivisione PDF non riuscita: ${e.message || 'riprova'}`)
+    }
+  }
   const downloadText = r => {
     const blob = new Blob([r.report], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.txt`; a.click(); URL.revokeObjectURL(url)
@@ -244,12 +332,20 @@ export default function App() {
     }
     return doc.output('blob')
   }
-  const printPdf = r => {
-    const blob = createPdfBlob(r); const url = URL.createObjectURL(blob)
-    const w = window.open(url, '_blank')
-    if (!w) { const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.pdf`; a.click(); notify('PDF scaricato.'); }
+  const downloadPdf = r => {
+    const blob = createPdfBlob(r)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `rapporto-catena-freddo-${r.id}.pdf`
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 60000)
+    notify('PDF pronto per il download.')
   }
+  const printPdf = downloadPdf
 
   const addPhotos = async e => {
     const files = Array.from(e.target.files || [])
@@ -264,8 +360,8 @@ export default function App() {
     let adminPin = localStorage.getItem('cold-chain-admin-pin')
     let pinJustCreated = false
     if (!adminPin) {
-      const first = window.prompt('Primo utilizzo: imposta un PIN locale riservato al responsabile per autorizzare le cancellazioni.')
-      if (!first || first.length < 4) { notify('PIN non impostato: cancellazione annullata.'); return }
+      const first = window.prompt('Primo utilizzo: imposta un PIN locale riservato al responsabile (minimo 4 caratteri).')
+      if (!first || first.length < 4) { notify('PIN non impostato: operazione annullata.'); return }
       const confirmPin = window.prompt('Ripeti il PIN per confermarlo.')
       if (first !== confirmPin) { notify('I PIN non coincidono.'); return }
       adminPin = first
@@ -273,14 +369,21 @@ export default function App() {
       localStorage.setItem('cold-chain-admin-pin', adminPin)
     }
     if (!pinJustCreated) {
-      const entered = window.prompt('Inserisci il PIN del responsabile per autorizzare la cancellazione.')
-      if (entered !== adminPin) { notify('PIN non corretto. Cancellazione non autorizzata.'); return }
+      const entered = window.prompt('Inserisci il PIN del responsabile per autorizzare l’annullamento.')
+      if (entered !== adminPin) { notify('PIN non corretto. Operazione non autorizzata.'); return }
     }
-    if (!window.confirm('Prima della cancellazione, assicurati di aver trasmesso tutto il lavoro svolto ai coordinatori/responsabili.\n\nVuoi eliminare definitivamente questo rapporto da questo dispositivo?')) return
-    setStore(old => ({ ...old, reports: old.reports.filter(item => item.id !== r.id) }))
+    const reason = window.prompt('Motivo obbligatorio dell’annullamento (es. rapporto duplicato o dati errati):')
+    if (!reason || !reason.trim()) { notify('Motivo mancante: rapporto non modificato.'); return }
+    if (!window.confirm('Il rapporto sarà marcato come ANNULLATO e resterà nello storico di audit. Confermi?')) return
+    const audit = { id: uid(), action: 'annullamento rapporto', reportId: r.id, technician: r.technician, reason: reason.trim(), at: stamp() }
+    setStore(old => ({
+      ...old,
+      reports: old.reports.map(item => item.id === r.id ? { ...item, cancelled: true, cancelledAt: audit.at, cancellationReason: audit.reason } : item),
+      auditLogs: [...(old.auditLogs || []), audit]
+    }))
     setSelected(null)
     setScreen('archive')
-    notify('Rapporto eliminato dall’archivio locale.')
+    notify('Rapporto annullato e registrato nello storico.')
   }
 
   return <div className="shell">
@@ -307,6 +410,21 @@ export default function App() {
       <img src="/fresenius-logo.png" alt="Fresenius" className="fresenius-logo"/>
       <img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana" className="aom-logo"/>
     </div>
+    {screen === 'processing' && <main className="page completion-page" aria-live="polite">
+      <div className="snowflake-processing"><Snowflake size={82} strokeWidth={1.6}/></div>
+      <h1>Sto completando l’intervento…</h1>
+      <p>Salvataggio del rapporto e generazione del PDF con le eventuali fotografie e la firma.</p>
+      <div className="completion-steps"><span>Verifica dei dati</span><span>Salvataggio in archivio</span><span>Preparazione del PDF</span></div>
+    </main>}
+
+    {screen === 'complete' && selected && <main className="page completion-page" aria-live="polite">
+      <div className="snowflake-success"><Snowflake size={88} strokeWidth={1.5}/><span><Check size={34} strokeWidth={3}/></span></div>
+      <h1>Tutto ok! Puoi riposare!</h1>
+      <p>Intervento salvato nell’archivio locale e PDF generato correttamente.</p>
+      <button className="primary" onClick={() => setScreen('report-preview')}><FileText/> Apri il rapporto</button>
+      <button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button>
+    </main>}
+
     {screen === 'home' && <main className="page">
       <div className="hero"><span className="eyebrow">ASSISTENTE OPERATIVO</span><h1>Intervento<br/>notturno</h1><p>Una domanda alla volta. I passaggi essenziali, senza complicazioni.</p></div>
       <label className="field-label">Tecnico reperibile</label><input className="input" value={tech} onChange={e => setTech(e.target.value)} placeholder="Nome e cognome" />
@@ -334,7 +452,7 @@ export default function App() {
     </main>}
 
     {screen === 'checklist' && <main className="page">
-      <div className="checklist-actions"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Esci</button><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
+      <div className="checklist-actions"><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
       {history.length > 0 && <button className="back-step" onClick={backStep}><ArrowLeft size={16}/> Domanda precedente</button>}
       <div className="stepcount">GUIDA OPERATIVA <span>CATENA DEL FREDDO</span></div>
       {step === 'monitor' && <Question title="Hai verificato l'allarme ricevuto su Spylog?" help="Prima di procedere, verifica l'allarme e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); setSpylogBlocked(true) }}/>} 
@@ -362,7 +480,7 @@ export default function App() {
       </>}
       {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
       {step === 'finalize' && <>
-        <div className="question"><div className="qicon"><FileText/></div><h1>Firma del referente</h1><p>È necessaria la firma del referente tecnico del reparto o di un suo delegato per concludere l’intervento.</p></div>
+        <div className="question"><div className="qicon"><FileText/></div><h1>Firma del referente</h1><p>Se il referente o un suo delegato è presente, acquisisci nome e firma. Se è assente, puoi comunque generare il rapporto registrando l’assenza.</p></div>
         <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>Referente presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>Non presente</button></div>
         {responsiblePresent === 'si' && <>
           <label className="field-label">Nome e cognome del referente</label>
@@ -372,9 +490,13 @@ export default function App() {
           {signatureData && <div className="signature-preview"><img src={signatureData} alt="Firma acquisita"/><small>Firma acquisita</small></div>}
         </>}
         <button className="primary" onClick={() => {
-          if (responsiblePresent !== 'si') { notify('Per concludere è necessaria la presenza del referente o di un delegato.'); return }
-          if (!responsibleName.trim()) { notify('Inserisci nome e cognome del referente.'); return }
-          if (!signatureData) { notify('Acquisisci la firma del referente prima di concludere.'); return }
+          if (responsiblePresent === 'si') {
+            if (!responsibleName.trim()) { notify('Inserisci nome e cognome del referente.'); return }
+            if (!signatureData) { notify('Acquisisci la firma del referente prima di concludere.'); return }
+          } else {
+            setResponsibleName('')
+            setSignatureData('')
+          }
           closeReport(pendingClose.outcome, pendingClose.overrides)
         }}>Concludi e genera rapporto <CheckCircle2/></button>
       </>}
@@ -384,8 +506,8 @@ export default function App() {
     {screen === 'report-preview' && selected && <main className="page">
       <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Il rapporto è stato registrato nell’archivio locale.</p></div>
       <div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><p><b>Referente:</b> {selected.responsible?.name}</p><p><b>Fine intervento:</b> {selected.shift?.end || '—'}</p></div>
-      <button className="primary" onClick={() => setShareMenuOpen(v => !v)}>Condividi <Download/></button>
-      {shareMenuOpen && <><button className="secondary" onClick={() => { setShareMenuOpen(false); shareNative(selected) }}><FileText/> Condividi PDF</button><button className="secondary" onClick={() => { setShareMenuOpen(false); downloadText(selected) }}><FileText/> Scarica TXT</button></>}
+      <button className="primary" onClick={() => setShareMenuOpen(v => !v)}>Condividi PDF <Download/></button>
+      {shareMenuOpen && <><button className="secondary" onClick={() => { setShareMenuOpen(false); shareNative(selected) }}><FileText/> WhatsApp, Telegram e altre app</button><button className="secondary" onClick={() => { setShareMenuOpen(false); downloadText(selected) }}><FileText/> Scarica TXT</button></>}
       <button className="secondary" onClick={() => setScreen('report-rt')}><FileText/> Visualizza RT</button>
       <p className="privacy">Il rapporto completo, con intestazione e firma, è consultabile nella visualizzazione RT.</p>
       <button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button>
@@ -394,17 +516,20 @@ export default function App() {
     {screen === 'report-rt' && selected && <main className="page">
       <button className="back" onClick={() => setScreen('report-preview')}><ArrowLeft size={17}/> Torna al rapporto</button>
       <div className="report-card rt-preview"><div className="rt-letterhead"><div className="rt-logos"><img src="/fresenius-logo.png" alt="Fresenius"/><img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana"/></div><b>SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO</b><h2>RAPPORTO TECNICO DI INTERVENTO</h2></div><pre>{selected.report}</pre>{selected.responsible?.signatureData && <div className="rt-signature"><b>Firma del referente</b><img src={selected.responsible.signatureData} alt="Firma del referente"/></div>}{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{`Foto ${i+1} – ${p.name}`}</figcaption></figure>)}</div>}</div>
-      <button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button>
+      <button className="primary" onClick={() => downloadPdf(selected)}><Download/> Scarica PDF</button>
+      <button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF con altre app</button>
     </main>}
 
     {signatureOpen && <SignatureModal onSave={dataUrl => { setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
     {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
-    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
+    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => downloadPdf(selected)}><Download/> Scarica PDF</button>
+      <button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF con altre app</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
+    {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true" aria-labelledby="exit-title"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2 id="exit-title">Vuoi uscire?</h2><p>{screen === 'checklist' ? 'Hai concluso l’intervento? Sei sicuro di voler uscire? Se scegli No, la bozza resterà salvata e potrai continuare.' : 'Sei sicuro di voler chiudere l’applicazione?'}</p><button className="primary" onClick={confirmExit}>Sì, esci</button><button className="secondary" onClick={() => setExitConfirmOpen(false)}>No, resta nell’app</button></section></div>}
     {toast && <div className="toast">{toast}</div>}
   </div>
 }
