@@ -217,3 +217,27 @@ body { overflow-x:hidden; }
 @keyframes snow-roll { 0% { transform:translateX(0) rotate(0) scale(1); } 45% { transform:translateX(90px) rotate(540deg) scale(.85); } 100% { transform:translateX(0) rotate(1080deg) scale(.2); opacity:0; } }
 @keyframes fade-away { 0%,35% { opacity:1; } 100% { opacity:0; } }
 @media (prefers-reduced-motion: reduce) { .snow-roll-out * { animation-duration:.01ms !important; } }
+
+/* Revisione 5.1 – switch tema in home, transizioni e firma in dark mode */
+.page{animation:page-fade-in .34s ease both}
+@keyframes page-fade-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.theme-swipe{margin-left:auto;position:relative;width:94px;height:36px;border:1px solid #7890ad;border-radius:22px;background:#dce8f5;color:#263b55;padding:3px 9px;display:flex;align-items:center;justify-content:flex-end;cursor:pointer;transition:background .25s,border-color .25s;box-shadow:inset 0 1px 3px #0002}
+.theme-swipe.is-dark{justify-content:flex-start;background:#26364e;border-color:#647b99;color:#f5f8fc}
+.theme-swipe-thumb{position:absolute;left:3px;top:3px;width:28px;height:28px;border-radius:50%;background:#fff;color:#e0a21a;display:grid;place-items:center;box-shadow:0 2px 6px #0003;transition:transform .25s ease}
+.theme-swipe.is-dark .theme-swipe-thumb{transform:translateX(58px);background:#e7eef9;color:#273c5a}
+.theme-swipe-label{font-size:9px;font-weight:800;letter-spacing:1px;margin:0 2px 0 32px}
+.theme-swipe.is-dark .theme-swipe-label{margin:0 32px 0 2px}
+.snow-transition-overlay{position:fixed;inset:0;z-index:2000;background:radial-gradient(circle at center,#eaf7ff 0%,#d8efff 42%,#f7fbff 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;color:#1769a5;animation:transition-overlay-in .22s ease both}
+.snow-transition-flake{display:grid;place-items:center;animation:full-snow-roll 2s cubic-bezier(.22,.75,.22,1) both;filter:drop-shadow(0 12px 30px #2585d855)}
+.snow-transition-overlay>span{font-size:13px;font-weight:700;letter-spacing:.5px;animation:fade-away 2s ease both}
+@keyframes transition-overlay-in{from{opacity:0}to{opacity:1}}
+@keyframes full-snow-roll{0%{transform:rotate(0) scale(.35)}30%{transform:rotate(360deg) scale(1.05)}68%{transform:rotate(900deg) scale(.92)}100%{transform:rotate(1440deg) scale(.15);opacity:0}}
+:root[data-theme="dark"] .signature-overlay{background:#111b29;color:#f0f5fb}
+:root[data-theme="dark"] .signature-toolbar b{color:#f0f5fb}
+:root[data-theme="dark"] .signature-toolbar small{color:#b7c5d7}
+:root[data-theme="dark"] .signature-toolbar .secondary{background:#26364b!important;color:#f5f8fc!important;border:1px solid #526783!important;box-shadow:0 2px 8px #0005}
+:root[data-theme="dark"] .signature-toolbar .primary{background:#2478df!important;color:#fff!important;box-shadow:0 4px 12px #0006}
+:root[data-theme="dark"] .signature-toolbar button:disabled{opacity:.72;color:#e4ebf5!important}
+:root[data-theme="dark"] .signature-area{background:#fff;border-color:#6684a8}
+:root[data-theme="dark"] .signature-area span{color:#596b82}
+@media(prefers-reduced-motion:reduce){.page,.snow-transition-flake,.snow-transition-overlay>span{animation-duration:.01ms!important}}
