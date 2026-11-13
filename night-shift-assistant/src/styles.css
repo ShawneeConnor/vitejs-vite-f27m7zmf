@@ -93,3 +93,23 @@ body { overflow-x:hidden; }
 .exit-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
 .exit-actions .primary,.exit-actions .secondary{margin:0;min-height:48px;justify-content:center;padding:10px}
 @media(max-width:420px){.rt-backdrop{padding:7px}.rt-modal{height:94dvh;border-radius:14px}.exit-modal{padding:21px}}
+
+/* Beta 1.2 patch: anteprima RT HTML nativa, senza iframe PDF */
+.rt-document-scroll{flex:1;min-height:0;overflow:auto;padding:16px;background:#e9edf3;-webkit-overflow-scrolling:touch}
+.rt-document{width:min(100%,794px);min-height:100%;margin:0 auto;padding:34px 38px;background:#fff;color:#263449;box-shadow:0 4px 22px #1b2c421c;font-family:Arial,system-ui,sans-serif}
+.rt-document-brand{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:24px}
+.rt-document-brand img{max-width:46%;max-height:54px;object-fit:contain}
+.rt-document-kicker{font-size:10px;font-weight:700;letter-spacing:1.2px;color:#355c88}
+.rt-document>h1{font-size:22px;line-height:1.25;margin:8px 0 12px;color:#1b3555}
+.rt-document-rule{height:3px;background:#2868aa;margin-bottom:20px}
+.rt-metadata{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;margin:0 0 22px}
+.rt-metadata div{padding:9px 0;border-bottom:1px solid #e7edf4;min-width:0}
+.rt-metadata dt{font-size:10px;color:#74839a;font-weight:700}
+.rt-metadata dd{margin:3px 0 0;font-size:12px;overflow-wrap:anywhere}
+.rt-document h2{font-size:13px;color:#234e7c;margin:20px 0 8px;padding-bottom:6px;border-bottom:1px solid #dce6f0}
+.rt-report-text{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.55 Arial,system-ui,sans-serif;color:#34445a;margin:0}
+.rt-photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.rt-photo-grid figure{margin:0;min-width:0}.rt-photo-grid img{width:100%;max-height:230px;object-fit:contain;background:#f4f6f8}.rt-photo-grid figcaption{font-size:10px;color:#66758b;margin-top:5px}
+.rt-signature{min-height:90px;display:flex;align-items:center;border:1px solid #dce4ed;padding:8px}.rt-signature img{max-width:260px;max-height:75px;object-fit:contain}.rt-signature span{font-size:11px;color:#8995a6}
+.rt-document-footer{margin-top:24px;padding-top:10px;border-top:1px solid #e4eaf1;color:#8793a3;font-size:9px}
+@media(max-width:520px){.rt-document-scroll{padding:8px}.rt-document{padding:22px 18px}.rt-document>h1{font-size:18px}.rt-metadata{grid-template-columns:1fr}.rt-photo-grid{grid-template-columns:1fr}}

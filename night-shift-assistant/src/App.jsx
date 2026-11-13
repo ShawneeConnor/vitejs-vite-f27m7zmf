@@ -24,7 +24,6 @@ export default function App() {
   const [showInfo, setShowInfo] = useState(false)
   const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const [rtPreviewOpen, setRtPreviewOpen] = useState(false)
-  const [rtPreviewUrl, setRtPreviewUrl] = useState('')
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [answers, setAnswers] = useState([])
   const [data, setData] = useState({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
@@ -88,12 +87,6 @@ export default function App() {
     return () => { mounted = false; listener?.remove(); window.removeEventListener('popstate', onPopState) }
   }, [])
 
-  useEffect(() => {
-    if (!rtPreviewOpen || !selected) return
-    const url = URL.createObjectURL(createPdfBlob(selected))
-    setRtPreviewUrl(url)
-    return () => { URL.revokeObjectURL(url); setRtPreviewUrl('') }
-  }, [rtPreviewOpen, selected])
 
   const confirmAppExit = () => {
     localStorage.setItem('cold-chain-exit-to-home', 'true')
@@ -224,12 +217,10 @@ export default function App() {
   const shareText = r => { const text = `Rapporto catena del freddo\n${fmt(r.createdAt)}\nTecnico: ${r.technician}\nTurno: ${r.shift?.start || '—'}–${r.shift?.end || '—'}\nEsito: ${r.outcome}\nFrigo INV: ${r.fridgeInventory || 'n/d'}\nSonda INV: ${r.probeInventory || 'n/d'}`; return text }
   const shareWhatsApp = r => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
   const shareTelegram = r => window.open(`https://t.me/share/url?url=&text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
-  const sharePdf = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-catena-freddo-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))) await navigator.share({ title:'Rapporto tecnico catena del freddo', files:[file] }); else { printPdf(r); notify('PDF salvato: puoi allegarlo dall’applicazione scelta.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione PDF non disponibile.'); } }
-  const shareTxt = async r => { try { const file = new File([r.report], `rapporto-catena-freddo-${r.id}.txt`, {type:'text/plain;charset=utf-8'}); if (navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))) await navigator.share({ title:'Rapporto tecnico catena del freddo', files:[file] }); else { downloadText(r); notify('TXT scaricato: puoi allegarlo dall’applicazione scelta.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione TXT non disponibile.'); } }
-  const downloadText = r => {
-    const blob = new Blob([r.report], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.txt`; a.click(); URL.revokeObjectURL(url)
-  }
+  const downloadBlob = (blob, filename) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 60000) }
+  const sharePdf = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-catena-freddo-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({title:'Rapporto tecnico catena del freddo',files:[file]}); else { downloadBlob(blob,file.name); notify('Download PDF avviato. Controlla la cartella Download del dispositivo.'); } } catch(e) { if(e.name !== 'AbortError') notify('Non è stato possibile condividere o scaricare il PDF. Riprova.'); } }
+  const shareTxt = async r => { try { const blob = new Blob([r.report || shareText(r)], {type:'text/plain;charset=utf-8'}); const file = new File([blob], `rapporto-catena-freddo-${r.id}.txt`, {type:'text/plain'}); if(navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({title:'Rapporto tecnico catena del freddo',files:[file]}); else { downloadBlob(blob,file.name); notify('Download TXT avviato. Controlla la cartella Download del dispositivo.'); } } catch(e) { if(e.name !== 'AbortError') notify('Non è stato possibile condividere o scaricare il TXT. Riprova.'); } }
+  const downloadText = r => { const blob = new Blob([r.report || shareText(r)], {type:'text/plain;charset=utf-8'}); downloadBlob(blob,`rapporto-catena-freddo-${r.id}.txt`); notify('Download TXT avviato. Controlla la cartella Download del dispositivo.') }
   const createPdfBlob = r => {
     const doc = new jsPDF({ unit: 'mm', format: 'a4' })
     const margin = 17
@@ -282,12 +273,7 @@ export default function App() {
     }
     return doc.output('blob')
   }
-  const printPdf = r => {
-    const blob = createPdfBlob(r); const url = URL.createObjectURL(blob)
-    const w = window.open(url, '_blank')
-    if (!w) { const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.pdf`; a.click(); notify('PDF scaricato.'); }
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
-  }
+  const printPdf = r => { try { downloadBlob(createPdfBlob(r),`rapporto-catena-freddo-${r.id}.pdf`); notify('Download PDF avviato. Controlla la cartella Download del dispositivo.') } catch(error) { console.error('Esportazione PDF non riuscita',error); notify('Impossibile generare il PDF. Riprova.') } }
 
   const addPhotos = async e => {
     const files = Array.from(e.target.files || [])
@@ -412,7 +398,7 @@ export default function App() {
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {shareMenuOpen && <div className="modal-backdrop" onClick={() => setShareMenuOpen(false)}><section className="info-modal action-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShareMenuOpen(false)}>✕</button><h2>Condividi rapporto</h2><p className="modal-intro">Scegli il formato da inviare tramite il menu di condivisione Android.</p><button className="primary" onClick={() => { setShareMenuOpen(false); sharePdf(selected) }}><FileText/> Condividi PDF</button><button className="secondary" onClick={() => { setShareMenuOpen(false); shareTxt(selected) }}><FileText/> Condividi TXT</button></section></div>}
-    {rtPreviewOpen && <div className="modal-backdrop rt-backdrop" onClick={() => setRtPreviewOpen(false)}><section className="rt-modal" role="dialog" aria-modal="true" aria-label="Anteprima rapporto tecnico" onClick={e => e.stopPropagation()}><header className="rt-modal-head"><div><b>Rapporto tecnico</b><small>Anteprima · sola lettura</small></div><button className="modal-close" onClick={() => setRtPreviewOpen(false)}>✕</button></header>{rtPreviewUrl ? <iframe title="Anteprima del rapporto tecnico" src={rtPreviewUrl} className="rt-frame"/> : <div className="rt-loading">Preparazione del rapporto…</div>}<footer className="rt-modal-foot"><button className="secondary" onClick={() => setRtPreviewOpen(false)}>Chiudi anteprima</button></footer></section></div>}
+    {rtPreviewOpen && <div className="modal-backdrop rt-backdrop" onClick={() => setRtPreviewOpen(false)}><section className="rt-modal" role="dialog" aria-modal="true" aria-label="Anteprima rapporto tecnico" onClick={e => e.stopPropagation()}><header className="rt-modal-head"><div><b>Rapporto tecnico</b><small>Anteprima · sola lettura</small></div><button className="modal-close" onClick={() => setRtPreviewOpen(false)}>✕</button></header><ReportPreview report={selected} /><footer className="rt-modal-foot"><button className="secondary" onClick={() => setRtPreviewOpen(false)}>Chiudi anteprima</button></footer></section></div>}
     {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal exit-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={36}/></div><h2>Vuoi uscire dall'applicazione?</h2><p>Hai concluso l'intervento? Sei sicuro di voler uscire? Se confermi, la sessione corrente verrà chiusa e alla prossima apertura partirai dalla Home. La bozza in corso non verrà ripresa automaticamente.</p><div className="exit-actions"><button className="secondary" onClick={() => setExitConfirmOpen(false)}>Annulla</button><button className="primary" onClick={confirmAppExit}>Sì, esci</button></div></section></div>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
     {toast && <div className="toast">{toast}</div>}
@@ -421,6 +407,19 @@ export default function App() {
 
 function Question({ title, help, onYes, onNo }) { const tap = fn => () => { if (localStorage.getItem('cold-chain-haptics') !== 'false' && navigator.vibrate) navigator.vibrate(12); fn?.() }; return <><div className="question"><div className="qicon"><ClipboardList/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><div className="choices"><button className="yes" onClick={tap(onYes)}><CheckCircle2/> SÌ</button><button className="no" onClick={tap(onNo)}><X/> NO</button></div></> }
 function TextStep({ title, help, value, onChange, onNext }) { return <><div className="question"><div className="qicon"><FileText/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><textarea className="textarea" value={value} onChange={e => onChange(e.target.value)} placeholder="Scrivi una breve nota..."/><button className="primary" onClick={onNext}>Continua <ArrowRight/></button></> }
+
+function ReportPreview({ report }) {
+  if (!report) return null
+  return <div className="rt-document-scroll"><article className="rt-document">
+    <header className="rt-document-brand"><img src="/fresenius-logo.png" alt="Fresenius"/><img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana"/></header>
+    <div className="rt-document-kicker">SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO</div><h1>RAPPORTO TECNICO DI INTERVENTO</h1><div className="rt-document-rule"/>
+    <dl className="rt-metadata">{[['Rapporto n.',report.id],['Data e ora',fmt(report.createdAt)],['Tecnico reperibile',report.technician],['Turno',`${report.shift?.start || '—'} – ${report.shift?.end || '—'}`],['Referente tecnico',report.responsible?.name || 'Non indicato'],['Esito',report.outcome || '—'],['Frigorifero – inventario',report.fridgeInventory || '—'],['Sonda / Spylog – inventario',report.probeInventory || '—']].map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+    <h2>Resoconto dell'intervento</h2><pre className="rt-report-text">{report.report || 'Nessun resoconto disponibile.'}</pre>
+    {report.photos?.length>0 && <><h2>Documentazione fotografica</h2><div className="rt-photo-grid">{report.photos.map((photo,i)=><figure key={i}><img src={photo.dataUrl} alt={photo.name || `Fotografia ${i+1}`}/><figcaption>{i+1}. {photo.name || `Fotografia ${i+1}`}</figcaption></figure>)}</div></>}
+    <h2>Firma del referente tecnico</h2><div className="rt-signature">{report.responsible?.signatureData?<img src={report.responsible.signatureData} alt="Firma del referente tecnico"/>:<span>Firma non acquisita</span>}</div>
+    <footer className="rt-document-footer">Documento generato automaticamente sulla base delle informazioni registrate nell'applicazione.</footer>
+  </article></div>
+}
 
 function SignatureModal({ onSave, onClose }) {
   const canvasRef = useRef(null)
