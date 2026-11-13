@@ -15,7 +15,8 @@
     "@capacitor/android": "^7.4.3",
     "@capacitor/core": "^7.4.3",
     "@capacitor/local-notifications": "^7.0.3",
-    "lucide-react": "^0.468.0",
+ "@capacitor/app": "^7.0.3",
+ "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "jspdf": "^2.5.2"
