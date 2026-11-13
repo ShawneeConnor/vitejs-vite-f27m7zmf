@@ -31,14 +31,8 @@ jobs:
           java-version: '21'
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: ''
       - name: Install project dependencies
-        run: npm ci
-      - name: Install and register native Capacitor plugins
-        run: |
-          npm install --save @capacitor/share@^7 @capacitor/filesystem@^7 @capacitor/app@^7 @capacitor/screen-orientation@^7
-          npm install --save-dev typescript@5.9.3
+        run: npm install
       - name: Build web app
         run: npm run build
       - name: Generate Android project
