@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core'
 import { Share } from '@capacitor/share'
 import { Filesystem, Directory } from '@capacitor/filesystem'
 import { App as CapacitorApp } from '@capacitor/app'
+import { ScreenOrientation } from '@capacitor/screen-orientation'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake, Moon, Sun } from 'lucide-react'
 
@@ -106,7 +107,6 @@ export default function App() {
 
   useEffect(() => {
     let listener
-    let active = true
     const handleBack = () => {
       if (signatureOpen) { setSignatureOpen(false); return }
       if (spylogBlocked) { setSpylogBlocked(false); return }
@@ -135,7 +135,6 @@ export default function App() {
       else h.remove()
     }).catch(error => console.error('Listener tasto indietro non disponibile', error))
     return () => {
-      active = false
       listener?.remove()
     }
   }, [screen, history, signatureOpen, spylogBlocked, showInfo, exitConfirmOpen])
@@ -563,13 +562,17 @@ export default function App() {
       {step === 'alarm-id' && <>
         <div className="question"><div className="qicon"><Bell/></div><h1>Numero inventario della sonda disabilitata</h1><p>Inserisci il numero per renderlo visibile agli altri reperibili.</p></div>
         <input className="input" value={data.disabledInventory} inputMode="numeric" onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
+        <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
+      </>}
+      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); go('alarm-frequency') }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
+      {step === 'alarm-frequency' && <>
+        <div className="question"><div className="qicon"><Bell/></div><h1>Frequenza dei promemoria</h1><p>Con quale frequenza vuoi ricevere un promemoria per riabilitare l'allarme della sonda INV {data.disabledInventory}?</p></div>
         <label className="field-label" htmlFor="reminder-interval">Quanto spesso vuoi che ti venga ricordato di riabilitare l'allarme?</label>
         <select id="reminder-interval" className="input" value={data.reminderIntervalHours || store.reminderIntervalHours || 6} onChange={e => setData(d => ({...d, reminderIntervalHours:Number(e.target.value)}))}>
           <option value={1}>Ogni ora</option><option value={6}>Ogni 6 ore</option><option value={12}>Ogni 12 ore</option><option value={24}>Ogni 24 ore</option>
         </select>
-        <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
+        <button className="primary" onClick={async () => { if (Capacitor.isNativePlatform()) { try { const permission = await LocalNotifications.checkPermissions(); if (permission.display !== 'granted') { const requested = await LocalNotifications.requestPermissions(); if (requested.display !== 'granted') notify('Permesso notifiche negato: i promemoria non potranno essere mostrati.') } } catch (error) { notify('Non è stato possibile verificare il permesso notifiche.') } } beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }}>Conferma frequenza <ArrowRight/></button>
       </>}
-      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={async () => { if (Capacitor.isNativePlatform()) { try { const permission = await LocalNotifications.checkPermissions(); if (permission.display !== 'granted') { const requested = await LocalNotifications.requestPermissions(); if (requested.display !== 'granted') notify('Permesso notifiche negato: i promemoria non potranno essere mostrati.') } } catch (error) { notify('Non è stato possibile verificare il permesso notifiche.') } } addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
       {step === 'finalize' && <>
         <div className="question"><div className="qicon"><FileText/></div><h1>Firma del referente</h1><p>Se il referente o un suo delegato è presente, acquisisci nome e firma. Se è assente, puoi comunque generare il rapporto registrando l’assenza.</p></div>
         <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>Referente presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>Non presente</button></div>
@@ -618,7 +621,23 @@ function Question({ title, help, onYes, onNo }) { return <><div className="quest
 function TextStep({ title, help, value, onChange, onNext }) { return <><div className="question"><div className="qicon"><FileText/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><textarea className="textarea" value={value} onChange={e => onChange(e.target.value)} placeholder="Scrivi una breve nota..."/><button className="primary" onClick={onNext}>Continua <ArrowRight/></button></> }
 
 function SignatureModal({ onSave, onClose }) {
-  useEffect(() => { let cancelled = false; const lock = async () => { try { await window.screen?.orientation?.lock?.('landscape') } catch (e) { console.warn('Blocco orientamento non supportato dal dispositivo', e) } }; lock(); return () => { cancelled = true; try { window.screen?.orientation?.unlock?.() } catch {} } }, [])
+  useEffect(() => {
+    const enterLandscape = async () => {
+      try {
+        await ScreenOrientation.lock({ orientation: 'landscape' })
+      } catch (error) {
+        console.warn('Impossibile impostare lo schermo in orizzontale', error)
+      }
+    }
+    enterLandscape()
+    return () => {
+      // La schermata firma è l'unica schermata orizzontale: al suo smontaggio
+      // ripristiniamo esplicitamente il verticale, invece di sbloccare soltanto.
+      ScreenOrientation.lock({ orientation: 'portrait' }).catch(error => {
+        console.warn('Impossibile ripristinare lo schermo in verticale', error)
+      })
+    }
+  }, [])
   const canvasRef = useRef(null)
   const areaRef = useRef(null)
   const drawing = useRef(false)
