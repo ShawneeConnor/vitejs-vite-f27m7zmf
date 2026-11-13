@@ -73,3 +73,23 @@ body { overflow-x:hidden; }
 .signature-area { width:100%; flex:1 1 auto; min-height:120px; }
 .signature-canvas { width:100%; height:100%; display:block; touch-action:none; }
 @media (min-width:600px) { .shell { box-shadow:0 0 40px #15233a0c; } }
+
+/* Beta 1.2 – condivisione, anteprima RT e conferma uscita */
+.action-modal .modal-intro{color:#718096;font-size:13px;line-height:1.5;margin:0 0 12px;padding:0;border:0}
+.action-modal .primary,.action-modal .secondary{margin-top:10px}
+.rt-backdrop{padding:12px}
+.rt-modal{width:min(100%,900px);height:min(92dvh,980px);background:#eef2f7;border-radius:18px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 20px 60px #0004}
+.rt-modal-head{min-height:62px;background:#fff;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e1e7ef}
+.rt-modal-head b,.rt-modal-head small{display:block}
+.rt-modal-head b{color:#172033;font-size:15px}
+.rt-modal-head small{color:#8491a4;font-size:11px;margin-top:3px}
+.rt-modal-head .modal-close{position:static;flex:0 0 32px}
+.rt-frame{border:0;background:#e9edf3;display:block;width:100%;height:100%;flex:1;min-height:0}
+.rt-loading{flex:1;display:grid;place-items:center;color:#718096;font-size:13px}
+.rt-modal-foot{background:#fff;border-top:1px solid #e1e7ef;padding:8px 16px calc(8px + env(safe-area-inset-bottom,0px))}
+.rt-modal-foot .secondary{margin:0;justify-content:center;min-height:44px}
+.exit-modal .done-icon{width:54px;height:54px;border-radius:16px;background:#fff4df;color:#b7791f;display:grid;place-items:center;margin-bottom:15px}
+.exit-modal p{color:#66758b;font-size:13px;line-height:1.55;margin:0;padding:0;border:0}
+.exit-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}
+.exit-actions .primary,.exit-actions .secondary{margin:0;min-height:48px;justify-content:center;padding:10px}
+@media(max-width:420px){.rt-backdrop{padding:7px}.rt-modal{height:94dvh;border-radius:14px}.exit-modal{padding:21px}}

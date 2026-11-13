@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsPDF } from 'jspdf'
+import { App as CapacitorApp } from '@capacitor/app'
 import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
@@ -21,6 +22,10 @@ export default function App() {
   const [shiftEnd, setShiftEnd] = useState('08:00')
   const [history, setHistory] = useState([])
   const [showInfo, setShowInfo] = useState(false)
+  const [shareMenuOpen, setShareMenuOpen] = useState(false)
+  const [rtPreviewOpen, setRtPreviewOpen] = useState(false)
+  const [rtPreviewUrl, setRtPreviewUrl] = useState('')
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [answers, setAnswers] = useState([])
   const [data, setData] = useState({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
   const [photos, setPhotos] = useState([])
@@ -42,7 +47,9 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const draft = loadDraft()
+    const deliberateExit = localStorage.getItem('cold-chain-exit-to-home') === 'true'
+    if (deliberateExit) localStorage.removeItem('cold-chain-exit-to-home')
+    const draft = deliberateExit ? null : loadDraft()
     if (draft) {
       setScreen(draft.screen || 'home')
       setStep(draft.step || 'start')
@@ -70,6 +77,37 @@ export default function App() {
     } catch (error) { console.error('Salvataggio bozza non riuscito', error) }
   }, [draftLoaded, screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, pendingClose, responsiblePresent, responsibleName, signatureData])
   useEffect(() => { localStorage.setItem('cold-chain-haptics', String(hapticsEnabled)) }, [hapticsEnabled])
+
+  useEffect(() => {
+    let listener
+    let mounted = true
+    CapacitorApp.addListener('backButton', () => { if (mounted) setExitConfirmOpen(true) }).then(handle => { listener = handle }).catch(() => {})
+    const onPopState = () => { setExitConfirmOpen(true); window.history.pushState({ coldChainGuard: true }, '') }
+    window.history.pushState({ coldChainGuard: true }, '')
+    window.addEventListener('popstate', onPopState)
+    return () => { mounted = false; listener?.remove(); window.removeEventListener('popstate', onPopState) }
+  }, [])
+
+  useEffect(() => {
+    if (!rtPreviewOpen || !selected) return
+    const url = URL.createObjectURL(createPdfBlob(selected))
+    setRtPreviewUrl(url)
+    return () => { URL.revokeObjectURL(url); setRtPreviewUrl('') }
+  }, [rtPreviewOpen, selected])
+
+  const confirmAppExit = () => {
+    localStorage.setItem('cold-chain-exit-to-home', 'true')
+    localStorage.removeItem(DRAFT_KEY)
+    setExitConfirmOpen(false)
+    setScreen('home')
+    setStep('start')
+    setHistory([])
+    setAnswers([])
+    setPhotos([])
+    setSignatureData('')
+    setSelected(null)
+    CapacitorApp.exitApp().catch(() => { /* In browser, remain on Home. */ })
+  }
   const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); if (hapticsEnabled && navigator.vibrate) navigator.vibrate([35, 25, 35]) }
   const buzz = () => { if (hapticsEnabled && navigator.vibrate) navigator.vibrate(12) }
   const addAnswer = (question, answer, note = '') => setAnswers(old => { const item = { question, answer, note, at: stamp() }; const i = old.findIndex(a => a.question === question); if (i < 0) return [...old, item]; const copy = [...old]; copy[i] = item; return copy })
@@ -186,7 +224,8 @@ export default function App() {
   const shareText = r => { const text = `Rapporto catena del freddo\n${fmt(r.createdAt)}\nTecnico: ${r.technician}\nTurno: ${r.shift?.start || '—'}–${r.shift?.end || '—'}\nEsito: ${r.outcome}\nFrigo INV: ${r.fridgeInventory || 'n/d'}\nSonda INV: ${r.probeInventory || 'n/d'}`; return text }
   const shareWhatsApp = r => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
   const shareTelegram = r => window.open(`https://t.me/share/url?url=&text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
-  const shareNative = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({ title:'Rapporto catena del freddo', files:[file], text:shareText(r) }); else { printPdf(r); notify('Apri il PDF e allegalo dalla cartella Download.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione non disponibile su questo dispositivo.'); } }
+  const sharePdf = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-catena-freddo-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))) await navigator.share({ title:'Rapporto tecnico catena del freddo', files:[file] }); else { printPdf(r); notify('PDF salvato: puoi allegarlo dall’applicazione scelta.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione PDF non disponibile.'); } }
+  const shareTxt = async r => { try { const file = new File([r.report], `rapporto-catena-freddo-${r.id}.txt`, {type:'text/plain;charset=utf-8'}); if (navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))) await navigator.share({ title:'Rapporto tecnico catena del freddo', files:[file] }); else { downloadText(r); notify('TXT scaricato: puoi allegarlo dall’applicazione scelta.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione TXT non disponibile.'); } }
   const downloadText = r => {
     const blob = new Blob([r.report], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.txt`; a.click(); URL.revokeObjectURL(url)
@@ -363,7 +402,7 @@ export default function App() {
       <div className="footnote">Le risposte vengono registrate nel rapporto tecnico. Il prototipo non sostituisce le procedure del servizio.</div>
     </main>}
 
-    {screen === 'report' && selected && <main className="page"><div className="success-head"><CheckCircle2 size={34}/><h1>Rapporto generato</h1><p>L'intervento è stato registrato.</p></div><div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="thumbs">{selected.photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><div className="share-grid"><button onClick={() => shareWhatsApp(selected)}>WhatsApp</button><button onClick={() => shareTelegram(selected)}>Telegram</button></div><button className="primary" onClick={() => shareNative(selected)}>Condividi rapporto</button><p className="privacy">Il rapporto è già salvato automaticamente nell’archivio di questo dispositivo.</p><button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button></main>}
+    {screen === 'report' && selected && <main className="page"><div className="success-head"><CheckCircle2 size={34}/><h1>Rapporto generato</h1><p>L'intervento è stato registrato.</p></div><div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><p className="muted">Il rapporto è stato salvato nell'archivio locale. Puoi verificarlo prima di condividerlo.</p></div><button className="primary big" onClick={() => setShareMenuOpen(true)}><Download/> Condividi</button><button className="secondary" onClick={() => setRtPreviewOpen(true)}><FileText/> Visualizza RT</button><p className="privacy">L'anteprima è in sola lettura. Il PDF condiviso utilizza gli stessi dati e la stessa carta intestata.</p><button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button></main>}
 
     {signatureOpen && <SignatureModal onSave={dataUrl => { setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
     {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
@@ -372,6 +411,9 @@ export default function App() {
     {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina rapporto (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
+    {shareMenuOpen && <div className="modal-backdrop" onClick={() => setShareMenuOpen(false)}><section className="info-modal action-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShareMenuOpen(false)}>✕</button><h2>Condividi rapporto</h2><p className="modal-intro">Scegli il formato da inviare tramite il menu di condivisione Android.</p><button className="primary" onClick={() => { setShareMenuOpen(false); sharePdf(selected) }}><FileText/> Condividi PDF</button><button className="secondary" onClick={() => { setShareMenuOpen(false); shareTxt(selected) }}><FileText/> Condividi TXT</button></section></div>}
+    {rtPreviewOpen && <div className="modal-backdrop rt-backdrop" onClick={() => setRtPreviewOpen(false)}><section className="rt-modal" role="dialog" aria-modal="true" aria-label="Anteprima rapporto tecnico" onClick={e => e.stopPropagation()}><header className="rt-modal-head"><div><b>Rapporto tecnico</b><small>Anteprima · sola lettura</small></div><button className="modal-close" onClick={() => setRtPreviewOpen(false)}>✕</button></header>{rtPreviewUrl ? <iframe title="Anteprima del rapporto tecnico" src={rtPreviewUrl} className="rt-frame"/> : <div className="rt-loading">Preparazione del rapporto…</div>}<footer className="rt-modal-foot"><button className="secondary" onClick={() => setRtPreviewOpen(false)}>Chiudi anteprima</button></footer></section></div>}
+    {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal exit-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={36}/></div><h2>Vuoi uscire dall'applicazione?</h2><p>Hai concluso l'intervento? Sei sicuro di voler uscire? Se confermi, la sessione corrente verrà chiusa e alla prossima apertura partirai dalla Home. La bozza in corso non verrà ripresa automaticamente.</p><div className="exit-actions"><button className="secondary" onClick={() => setExitConfirmOpen(false)}>Annulla</button><button className="primary" onClick={confirmAppExit}>Sì, esci</button></div></section></div>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
     {toast && <div className="toast">{toast}</div>}
   </div>
