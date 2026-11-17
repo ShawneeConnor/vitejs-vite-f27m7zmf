@@ -1,9 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsPDF } from 'jspdf'
-import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X } from 'lucide-react'
+import { Capacitor } from '@capacitor/core'
+import { Share } from '@capacitor/share'
+import { Filesystem, Directory } from '@capacitor/filesystem'
+import { App as CapacitorApp } from '@capacitor/app'
+import { ScreenOrientation } from '@capacitor/screen-orientation'
+import { LocalNotifications } from '@capacitor/local-notifications'
+import { AlertTriangle, Archive, ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardList, Clock3, Download, FileText, ImagePlus, Plus, ShieldCheck, Thermometer, X, Snowflake, Moon, Sun } from 'lucide-react'
 
 const KEY = 'cold-chain-assistant-v3'
-const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || { reports: [], reminders: [] } } catch { return { reports: [], reminders: [] } } }
+const DRAFT_KEY = 'cold-chain-assistant-v3-draft'
+const loadDraft = () => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) } catch { return null } }
+const load = () => { try { const saved = JSON.parse(localStorage.getItem(KEY)) || {}; return { reports: [], reminders: [], auditLogs: [], reminderIntervalHours: 6, ...saved } } catch { return { reports: [], reminders: [], auditLogs: [] } } }
+
+const openLocalDb = () => new Promise((resolve, reject) => {
+  const request = indexedDB.open('san-martino-cold-chain', 1)
+  request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('data')) request.result.createObjectStore('data') }
+  request.onsuccess = () => resolve(request.result)
+  request.onerror = () => reject(request.error)
+})
+const localDbGet = async key => { const db = await openLocalDb(); return new Promise((resolve,reject) => { const tx=db.transaction('data','readonly'); const req=tx.objectStore('data').get(key); req.onsuccess=()=>resolve(req.result ?? null); req.onerror=()=>reject(req.error) }) }
+const localDbSet = async (key,value) => { const db=await openLocalDb(); return new Promise((resolve,reject)=>{ const tx=db.transaction('data','readwrite'); tx.objectStore('data').put(value,key); tx.oncomplete=()=>resolve(true); tx.onerror=()=>reject(tx.error) }) }
+const localDbDelete = async key => { const db=await openLocalDb(); return new Promise((resolve,reject)=>{ const tx=db.transaction('data','readwrite'); tx.objectStore('data').delete(key); tx.oncomplete=()=>resolve(true); tx.onerror=()=>reject(tx.error) }) }
+
 const stamp = () => new Date().toISOString()
 const fmt = value => new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
@@ -16,89 +35,193 @@ export default function App() {
   const [step, setStep] = useState('start')
   const [tech, setTech] = useState('')
   const [shiftStart, setShiftStart] = useState('20:00')
-  const [shiftEnd, setShiftEnd] = useState('08:00')
+  const [shiftEnd, setShiftEnd] = useState('')
   const [history, setHistory] = useState([])
   const [showInfo, setShowInfo] = useState(false)
   const [answers, setAnswers] = useState([])
-  const [data, setData] = useState({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' })
+  const [data, setData] = useState({ fridge: '', probe: '', ticket: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: 6, monitorNote: '', callReason: '', unnotifiedContacts: '' })
   const [photos, setPhotos] = useState([])
+  const [details, setDetails] = useState({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' })
   const [selected, setSelected] = useState(null)
   const [toast, setToast] = useState('')
   const [pendingClose, setPendingClose] = useState({ outcome: 'Intervento concluso', overrides: {} })
   const [responsiblePresent, setResponsiblePresent] = useState('no')
   const [responsibleName, setResponsibleName] = useState('')
   const [signatureData, setSignatureData] = useState('')
+  const [operatorSignatureData, setOperatorSignatureData] = useState('')
+  const [signatureTarget, setSignatureTarget] = useState('responsible')
   const [signatureOpen, setSignatureOpen] = useState(false)
-  const [showDone, setShowDone] = useState(false)
+  const [theme, setTheme] = useState(() => localStorage.getItem('cold-chain-theme') || 'light')
+  const [completionBusy, setCompletionBusy] = useState(false)
+  const [completionAction, setCompletionAction] = useState('')
+  const [previewPdfUrl, setPreviewPdfUrl] = useState('')
+  const [transitionHome, setTransitionHome] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
+  const [draftLoaded, setDraftLoaded] = useState(false)
+  const [spylogBlocked, setSpylogBlocked] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
 
   useEffect(() => {
     const timer = window.setTimeout(() => setShowSplash(false), 1750)
     return () => window.clearTimeout(timer)
   }, [])
 
-  useEffect(() => { localStorage.setItem(KEY, JSON.stringify(store)) }, [store])
-  const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 2500) }
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const savedStore = await localDbGet(KEY)
+        if (active && savedStore) setStore(savedStore)
+        else if (active) await localDbSet(KEY, load())
+        const draft = await localDbGet(DRAFT_KEY) || loadDraft()
+        if (!active) return
+        if (draft) {
+          setScreen(draft.screen || 'home'); setStep(draft.step || 'start'); setTech(draft.tech || '')
+          setShiftStart(draft.shiftStart || '20:00'); setShiftEnd(draft.shiftEnd || '')
+          setHistory(draft.history || []); setAnswers(draft.answers || [])
+          setData(draft.data || { fridge:'', probe:'', ticket:'', disabled:'no', disabledInventory:'', remindDisabled:'si', reminderIntervalHours:6, monitorNote:'', callReason:'', unnotifiedContacts:'' })
+          setPhotos(draft.photos || []); setDetails(draft.details || { codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setPendingClose(draft.pendingClose || { outcome:'Intervento concluso', overrides:{} })
+          setResponsiblePresent(draft.responsiblePresent || 'no'); setResponsibleName(draft.responsibleName || '')
+          setSignatureData(draft.signatureData || ''); setOperatorSignatureData(draft.operatorSignatureData || '')
+          if (!await localDbGet(DRAFT_KEY)) await localDbSet(DRAFT_KEY,draft)
+        }
+      } catch (error) { console.error('Lettura archivio locale non riuscita',error) }
+      if (active) setDraftLoaded(true)
+    })()
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => { if (draftLoaded) localDbSet(KEY, store).catch(error => console.error('Salvataggio archivio locale non riuscito',error)) }, [store, draftLoaded])
+  useEffect(() => {
+    if (!draftLoaded) return
+    const draft = { screen:'checklist', step, tech, shiftStart, shiftEnd, history, answers, data, photos, details, pendingClose, responsiblePresent, responsibleName, signatureData, operatorSignatureData }
+    if (screen === 'checklist' || screen === 'processing') localDbSet(DRAFT_KEY,draft).catch(error => console.error('Salvataggio bozza non riuscito',error))
+    else localDbDelete(DRAFT_KEY).catch(error => console.error('Rimozione bozza non riuscita',error))
+  }, [draftLoaded, screen, step, tech, shiftStart, shiftEnd, history, answers, data, photos, details, pendingClose, responsiblePresent, responsibleName, signatureData, operatorSignatureData])
+  useEffect(() => { localStorage.setItem('cold-chain-theme', theme); document.documentElement.dataset.theme = theme }, [theme])
+  const notify = msg => { setToast(msg); setTimeout(() => setToast(''), 3000) }
+  const buzz = () => {}
   const addAnswer = (question, answer, note = '') => setAnswers(old => { const item = { question, answer, note, at: stamp() }; const i = old.findIndex(a => a.question === question); if (i < 0) return [...old, item]; const copy = [...old]; copy[i] = item; return copy })
   const go = next => { setHistory(old => [...old, step]); setStep(next) }
   const backStep = () => { if (history.length) { setStep(history[history.length - 1]); setHistory(old => old.slice(0, -1)) } }
-  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart || !shiftEnd) { notify('Inserisci inizio e fine turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', notes: '' }); setPhotos([]); setStep('monitor'); setScreen('checklist') }
+
+  const confirmExit = async () => {
+    setExitConfirmOpen(false)
+    if (Capacitor.isNativePlatform()) {
+      try { await CapacitorApp.exitApp() } catch (error) { console.error('Uscita app non riuscita', error) }
+      return
+    }
+    try { await localDbDelete(DRAFT_KEY) } catch {}
+    setScreen('home')
+    setStep('start')
+  }
+
+  useEffect(() => {
+    let listener
+    const handleBack = () => {
+      if (signatureOpen) { setSignatureOpen(false); return }
+      if (spylogBlocked) { setSpylogBlocked(false); return }
+      if (showInfo) { setShowInfo(false); return }
+      if (exitConfirmOpen) { setExitConfirmOpen(false); return }
+      if (screen === 'checklist') {
+        const untouchedFirstQuestion = history.length === 0 && answers.length === 0 && !data.fridge && !data.probe && !data.ticket && !data.disabledInventory && !data.notes && photos.length === 0
+        if (untouchedFirstQuestion) {
+          try { localStorage.removeItem(DRAFT_KEY); localDbDelete(DRAFT_KEY) } catch {}
+          setScreen('home')
+          setStep('start')
+        } else if (history.length > 0) backStep()
+        else setExitConfirmOpen(true)
+        return
+      }
+      if (screen === 'review') { setScreen('checklist'); return }
+      if (screen === 'confirm-close') { setScreen('review'); return }
+      if (screen === 'complete') { setExitConfirmOpen(true); return }
+      if (screen === 'processing') return
+      if (screen === 'archive') { setExitConfirmOpen(false); setScreen('home'); return }
+      if (screen === 'detail') { setExitConfirmOpen(false); setScreen('archive'); return }
+      if (screen === 'report-preview' || screen === 'reminders') { setScreen('home'); return }
+      setExitConfirmOpen(true)
+    }
+    CapacitorApp.addListener('backButton', handleBack).then(h => {
+      if (active) listener = h
+      else h.remove()
+    }).catch(error => console.error('Listener tasto indietro non disponibile', error))
+    return () => {
+      listener?.remove()
+    }
+  }, [screen, history, signatureOpen, spylogBlocked, showInfo, exitConfirmOpen])
+  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: store.reminderIntervalHours || 6, monitorNote: '', callReason: '', unnotifiedContacts: '' }); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setOperatorSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
 
   const beginCloseReport = (outcome, overrides = {}) => {
     setPendingClose({ outcome, overrides })
     setResponsiblePresent('no')
     setResponsibleName('')
     setSignatureData('')
-    go('finalize')
+    setOperatorSignatureData('')
+    setScreen('review')
   }
 
-  const closeReport = (outcome, overrides = {}) => {
-    const finalData = { ...data, ...overrides }
+  const closeReport = async (outcome, overrides = {}, shortReport = false, endTime = '') => {
+    setScreen('processing')
+    try {
+      // Lascia il tempo alla schermata di elaborazione di apparire prima delle operazioni reali.
+      await new Promise(resolve => window.setTimeout(resolve, 180))
+      const finalData = { ...data, ...overrides }
+      const record = {
+        id: uid(),
+        createdAt: stamp(),
+        technician: tech.trim() || 'Tecnico non indicato',
+        shift: { start: shiftStart, end: endTime || shiftEnd },
+        answers,
+        outcome,
+        responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
+        shortReport,
+        fridgeInventory: finalData.fridge,
+        probeInventory: finalData.probe,
+        ticketReference: finalData.ticket?.trim() || '',
+        disabledAlarm: finalData.disabled === 'si'
+          ? { inventory: finalData.disabledInventory.trim(), reminder: finalData.remindDisabled === 'si' }
+          : null,
+        notes: [finalData.monitorNote && `Nota monitoraggio: ${finalData.monitorNote}`, finalData.callReason && `Motivo mancato contatto: ${finalData.callReason}`, finalData.unnotifiedContacts && `Comunicazioni ancora da effettuare: ${finalData.unnotifiedContacts}`].filter(Boolean).join('\n'),
+        monitorNote: finalData.monitorNote || '', callReason: finalData.callReason || '', unnotifiedContacts: finalData.unnotifiedContacts || '',
+        operatorSignatureData, details,
+        photos: photos.map(p => ({ name: p.name, dataUrl: p.dataUrl }))
+      }
+      const report = makeReport(record)
+      const summary = answers.map(a => `${a.question}: ${a.answer}${a.note ? ` (${a.note})` : ''}`).join(' · ').slice(0, 900)
+      const completed = { ...record, report, summary }
 
-    const record = {
-      id: uid(),
-      createdAt: stamp(),
-      technician: tech.trim() || 'Tecnico non indicato',
-      shift: { start: shiftStart, end: shiftEnd },
-      answers,
-      outcome,
-      responsible: { present: responsiblePresent === 'si', name: responsiblePresent === 'si' ? responsibleName.trim() : '', signatureData: responsiblePresent === 'si' ? signatureData : '' },
-      fridgeInventory: finalData.fridge,
-      probeInventory: finalData.probe,
-      disabledAlarm: finalData.disabled === 'si'
-        ? {
-            inventory: finalData.disabledInventory.trim(),
-            reminder: finalData.remindDisabled === 'si'
-          }
-        : null,
-      notes: finalData.notes.trim(),
-      photos: photos.map(p => ({ name: p.name, dataUrl: p.dataUrl }))
+      // Genera davvero il PDF prima di mostrare il completamento: include foto e firma, se presenti.
+      const pdfBlob = await createPdfBlob(completed)
+      if (!(pdfBlob instanceof Blob) || pdfBlob.size < 500 || pdfBlob.type !== 'application/pdf') {
+        throw new Error('Il PDF non è stato generato correttamente. La bozza è stata conservata.')
+      }
+
+      const existingReportIndex = store.reports.findIndex(item => item.id === completed.id)
+      const persistedReport = { ...completed, savedInApp: false, shared: false }
+      const nextReports = existingReportIndex >= 0
+        ? store.reports.map(item => item.id === completed.id ? { ...item, ...persistedReport } : item)
+        : [persistedReport, ...store.reports]
+      const nextStore = {
+        ...store,
+        reports: nextReports,
+        reminders: finalData.disabled === 'si' && finalData.remindDisabled === 'si'
+          ? [...store.reminders, { id: uid(), inventory: finalData.disabledInventory.trim(), createdAt: stamp(), reportId: record.id, resolved: false, intervalHours: Number(finalData.reminderIntervalHours || store.reminderIntervalHours || 6) }]
+          : store.reminders,
+        reminderIntervalHours: Number(finalData.reminderIntervalHours || store.reminderIntervalHours || 6)
+      }
+      // Scrittura esplicita: la schermata verde arriva solo dopo la conferma del salvataggio locale.
+      await localDbSet(KEY, nextStore)
+      setStore(nextStore)
+      setSelected(completed)
+      setStep('')
+      await localDbDelete(DRAFT_KEY)
+      setScreen('report-preview')
+    } catch (error) {
+      console.error('Conclusione intervento non riuscita', error)
+      setScreen('checklist')
+      notify(`Non posso confermare il completamento: ${error.message || 'errore durante il salvataggio'}`)
     }
-
-    const report = makeReport(record)
-
-    setStore(old => ({
-      ...old,
-      reports: [{ ...record, report }, ...old.reports],
-      reminders:
-        finalData.disabled === 'si' && finalData.remindDisabled === 'si'
-          ? [
-              ...old.reminders,
-              {
-                id: uid(),
-                inventory: finalData.disabledInventory.trim(),
-                createdAt: stamp(),
-                reportId: record.id,
-                resolved: false
-              }
-            ]
-          : old.reminders
-    }))
-
-    setSelected({ ...record, report })
-    setScreen('report')
-    setStep('')
-    setShowDone(true)
   }
 
   function makeReport(r) {
@@ -110,15 +233,13 @@ export default function App() {
       ? 'Le verifiche previste per l’intervento sono state completate. L’attività del tecnico reperibile si considera conclusa.'
       : `Esito dell’intervento: ${r.outcome}.`
     const lines = [
-      'FRESENIUS  |  IRCCS AZIENDA OSPEDALIERA METROPOLITANA',
-      'SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO',
-      'RAPPORTO TECNICO DI INTERVENTO',
-      '',
       `Rapporto n.: ${r.id}`,
       `Data e ora: ${fmt(r.createdAt)}`,
+      `Codice Ente / Richiesta N. (Ticket MainSim / Biogest): ${r.ticketReference || 'Non specificato'}`,
+      'Tipo di intervento: REPERIBILITÀ', 
       `Tecnico reperibile: ${r.technician}`,
       `Turno: ${r.shift?.start || '—'} – ${r.shift?.end || '—'}`,
-      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+      r.shortReport ? 'Referente e firma: non previsti per questa tipologia di intervento.' : `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
       '',
       '1. OGGETTO E CONTESTO',
       intro,
@@ -126,6 +247,7 @@ export default function App() {
       '2. IDENTIFICAZIONE',
       `Frigorifero – inventario: ${r.fridgeInventory || 'Intervento da remoto – non rilevato sul posto'}`,
       `Sonda / Spylog – inventario: ${r.probeInventory || 'Non rilevato sul posto'}`,
+      `Ticket Biogest / MainSim: ${r.ticketReference || 'Non specificato'}`, 
       '',
       '3. ATTIVITÀ E VERIFICHE ESEGUITE',
       checks || 'Verifiche registrate nella checklist operativa.',
@@ -140,94 +262,289 @@ export default function App() {
       '6. DOCUMENTAZIONE',
       `Fotografie allegate: ${r.photos?.length || 0}`,
       '',
-      'FIRME',
-      `Tecnico reperibile: ${r.technician}`,
-      `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
-      r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non prevista]',
-      '',
+      ...(r.shortReport ? [] : [
+        'FIRME',
+        `Tecnico reperibile: ${r.technician}`,
+        `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
+        r.responsible?.present ? (r.responsible.signatureData ? '[Firma acquisita sul dispositivo e allegata al PDF]' : '[Firma non acquisita]') : '[Firma non acquisita: referente assente]',
+        ''
+      ]),
       'Documento generato automaticamente sulla base delle informazioni inserite dal tecnico. Verificare la completezza dei dati prima della sua archiviazione.'
     ]
     return lines.join('\n')
   }
 
+  const pdfFilename = r => `${(r.ticketReference || new Date(r.createdAt).toISOString().slice(0,10)).replace(/[^a-zA-Z0-9_-]+/g, '-') } - Intervento Catena Freddo.pdf`
   const shareText = r => { const text = `Rapporto catena del freddo\n${fmt(r.createdAt)}\nTecnico: ${r.technician}\nTurno: ${r.shift?.start || '—'}–${r.shift?.end || '—'}\nEsito: ${r.outcome}\nFrigo INV: ${r.fridgeInventory || 'n/d'}\nSonda INV: ${r.probeInventory || 'n/d'}`; return text }
   const shareWhatsApp = r => window.open(`https://wa.me/?text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
   const shareTelegram = r => window.open(`https://t.me/share/url?url=&text=${encodeURIComponent(shareText(r))}`, '_blank', 'noopener,noreferrer')
-  const shareNative = async r => { try { const blob = createPdfBlob(r); const file = new File([blob], `rapporto-${r.id}.pdf`, {type:'application/pdf'}); if (navigator.share && navigator.canShare?.({files:[file]})) await navigator.share({ title:'Rapporto catena del freddo', files:[file], text:shareText(r) }); else { printPdf(r); notify('Apri il PDF e allegalo dalla cartella Download.'); } } catch (e) { if (e.name !== 'AbortError') notify('Condivisione non disponibile su questo dispositivo.'); } }
-  const downloadText = r => {
-    const blob = new Blob([r.report], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.txt`; a.click(); URL.revokeObjectURL(url)
-  }
-  const createPdfBlob = r => {
-    const doc = new jsPDF({ unit: 'mm', format: 'a4' })
-    const margin = 17
-    doc.setFillColor(255,255,255); doc.rect(0, 0, 210, 48, 'F')
-    doc.addImage(FRESENIUS_LOGO, 'PNG', margin, 7, 65, 10)
-    doc.addImage(AOM_LOGO, 'PNG', 126, 5, 67, 21)
-    doc.setTextColor(25,39,60); doc.setFont('helvetica','bold'); doc.setFontSize(8)
-    doc.text('SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO', margin, 33)
-    doc.setFontSize(15); doc.text('RAPPORTO TECNICO DI INTERVENTO', margin, 41)
-    doc.setDrawColor(35,105,190); doc.setLineWidth(0.7); doc.line(margin,46,193,46)
-    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(45,58,76)
-    const lines = doc.splitTextToSize(r.report, 176)
-    let y = 54
-    lines.forEach(line => {
-      if (y > 275) { doc.addPage(); y = 20 }
-      doc.text(line, margin, y); y += 4.7
-    })
-    if (r.photos?.length) {
-      if (y > 255) { doc.addPage(); y = 20 }
-      y += 7
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
-      doc.text('FOTOGRAFIE ALLEGATE', margin, y)
-      y += 8
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
-      const photoW = 82
-      const photoH = 58
-      const gapX = 10
-      r.photos.forEach((photo, index) => {
-        try {
-          const col = index % 2
-          if (col === 0 && y + photoH + 10 > 280) { doc.addPage(); y = 20 }
-          const x = margin + col * (photoW + gapX)
-          const props = doc.getImageProperties(photo.dataUrl)
-          const ratio = Math.min(photoW / props.width, photoH / props.height)
-          const w = props.width * ratio
-          const h = props.height * ratio
-          doc.addImage(photo.dataUrl, undefined, x, y, w, h)
-          doc.text(doc.splitTextToSize(photo.name || `Fotografia ${index + 1}`, photoW), x, y + h + 4)
-          if (col === 1 || index === r.photos.length - 1) y += photoH + 13
-        } catch (error) {
-          doc.text(`Impossibile inserire la fotografia: ${photo.name || index + 1}`, margin, y)
-          y += 7
-        }
-      })
+  const blobToBase64 = blob => new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const result = String(reader.result || '')
+      const comma = result.indexOf(',')
+      if (comma < 0) reject(new Error('Conversione PDF non riuscita'))
+      else resolve(result.slice(comma + 1))
     }
-    if (r.responsible?.signatureData) {
-      if (y > 245) { doc.addPage(); y = 25 }
-      doc.setFont('helvetica','bold'); doc.text('Firma responsabile / referente', margin, y + 5)
-      doc.addImage(r.responsible.signatureData, 'PNG', margin, y + 8, 65, 24)
+    reader.onerror = () => reject(reader.error || new Error('Lettura PDF non riuscita'))
+    reader.readAsDataURL(blob)
+  })
+  const shareNative = async r => {
+    try {
+      const blob = await createPdfBlob(r)
+      const filename = pdfFilename(r)
+      if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob)
+        const saved = await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Cache, recursive: true })
+        await Share.share({ title: 'Rapporto tecnico – Catena del freddo', text: shareText(r), files: [saved.uri], dialogTitle: 'Condividi rapporto PDF' })
+        const latest = await localDbGet(KEY) || store
+        const next = { ...latest, reports: latest.reports.map(item => item.id === r.id ? { ...item, shared: true, sharedAt: stamp() } : item) }
+        await localDbSet(KEY, next); setStore(next)
+        setCompletionAction('shared'); setScreen('complete'); return
+      }
+      const file = new File([blob], filename, { type: 'application/pdf' })
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: 'Rapporto tecnico – Catena del freddo', files: [file], text: shareText(r) })
+        const latest = await localDbGet(KEY) || store
+        const next = { ...latest, reports: latest.reports.map(item => item.id === r.id ? { ...item, shared: true, sharedAt: stamp() } : item) }
+        await localDbSet(KEY, next); setStore(next)
+        setCompletionAction('shared'); setScreen('complete')
+      } else {
+        downloadPdf(r)
+        notify('PDF scaricato. Puoi allegarlo da Download.')
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') notify(`Condivisione PDF non riuscita: ${e.message || 'riprova'}`)
+    }
+  }
+
+  const createPdfBlob = async r => {
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+    const response = await fetch('/rt-prova-template.png')
+    if (!response.ok) throw new Error('Modulo RT originale non disponibile')
+    const templateBlob = await response.blob()
+    const templateData = await new Promise((resolve, reject) => {
+      const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(templateBlob)
+    })
+    doc.addImage(templateData, 'PNG', 0, 0, 210, 297)
+    const text = (value, x, y, max=52, size=13, maxLines=2) => {
+      if (value === undefined || value === null || String(value).trim() === '') return
+      doc.setFont('helvetica','normal')
+      doc.setTextColor(10,10,10)
+      const content = String(value).trim()
+      let fontSize = size
+      doc.setFontSize(fontSize)
+      while (fontSize > 10 && content.length < 55 && doc.getTextWidth(content) > max) {
+        fontSize -= 0.5
+        doc.setFontSize(fontSize)
+      }
+      const lines = doc.splitTextToSize(content, max).slice(0, maxLines)
+      doc.text(lines, x, y, { lineHeightFactor: 1.12 })
+    }
+    const date = new Date(r.createdAt)
+    const dateText = date.toLocaleDateString('it-IT')
+    // Campi del modulo originale: coordinate in millimetri riferite alla scansione A4.
+    text(r.technician, 13, 44, 50, 13)
+    text(r.details?.codeEnte || r.ticketReference || '', 116, 22, 35, 13)
+    text(dateText, 13, 32, 23, 13); text(r.shift?.start || '', 65, 32, 20, 13); text(dateText, 127, 32, 23, 13); text(r.shift?.end || '', 174, 32, 20, 13)
+    text(r.fridgeInventory || r.probeInventory || '', 13, 61, 49, 13)
+    text(r.details?.presidio || '', 60, 61, 73, 13); text(r.details?.padiglione || '', 135, 61, 58, 13)
+    text(r.details?.reparto || '', 13, 71, 100, 13); text(r.details?.piano || '', 111, 71, 23, 13); text(r.details?.stanza || '', 137, 71, 56, 13)
+    text(r.details?.description || '', 13, 82, 48, 13); text(r.details?.manufacturer || '', 60, 82, 48, 13); text(r.details?.model || '', 111, 82, 48, 13); text(r.details?.serial || '', 161, 82, 32, 13)
+    text(r.details?.fault || '', 108, 101, 84, 13, 4)
+    // Sintesi checklist: più righe, corpo leggibile, confinata nel riquadro Descrizione intervento.
+    text(r.summary || '', 13, 155, 190, 13, 13)
+    text(r.details?.instrument || '', 13, 181, 55, 13); text(r.details?.workHours || '', 116, 181, 25, 13); text(r.details?.travelHours || '', 164, 181, 25, 13)
+    text(r.details?.materials || '', 13, 201, 185, 13, 3)
+    text(r.outcome || '', 13, 254, 185, 13, 2)
+    text(r.notes || '', 13, 266, 190, 13, 2)
+    if (r.operatorSignatureData) doc.addImage(r.operatorSignatureData, 'PNG', 12, 275, 70, 15)
+    if (r.responsible?.signatureData) doc.addImage(r.responsible.signatureData, 'PNG', 132, 275, 65, 15)
+    else text('REFERENTE NON PRESENTE – FIRMA NON ACQUISITA', 128, 282, 70, 11)
+    if (r.photos?.length) {
+      doc.addPage()
+      doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('DOCUMENTAZIONE FOTOGRAFICA', 15, 18)
+      doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text(`Rapporto ${r.id} · ${dateText} · ${r.technician}`, 15, 25)
+      const cellW=86, cellH=105, gapX=12, gapY=8, startY=34
+      r.photos.forEach((photo,index) => {
+        const pageIndex=Math.floor(index/4), slot=index%4
+        if (pageIndex>0 && slot===0) { doc.addPage(); doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text('DOCUMENTAZIONE FOTOGRAFICA – CONTINUA',15,18) }
+        const row=Math.floor(slot/2), col=slot%2, x=15+col*(cellW+gapX), y=startY+row*(cellH+gapY)
+        try { const props=doc.getImageProperties(photo.dataUrl); const ratio=Math.min((cellW-4)/props.width,82/props.height); const w=props.width*ratio, h=props.height*ratio; doc.addImage(photo.dataUrl,undefined,x+(cellW-w)/2,y,w,h); doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text(doc.splitTextToSize(`Foto ${index+1} – ${photo.name || 'Allegato'}`,cellW),x,y+88) } catch { doc.text(`Foto ${index+1}: immagine non leggibile`,x,y+8) }
+      })
     }
     return doc.output('blob')
   }
-  const printPdf = r => {
-    const blob = createPdfBlob(r); const url = URL.createObjectURL(blob)
-    const w = window.open(url, '_blank')
-    if (!w) { const a = document.createElement('a'); a.href = url; a.download = `rapporto-catena-freddo-${r.id}.pdf`; a.click(); notify('PDF scaricato.'); }
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
+
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    if (screen === 'report-preview' && selected) {
+      setPreviewPdfUrl('')
+      createPdfBlob(selected)
+        .then(blob => {
+          if (!active) return
+          objectUrl = URL.createObjectURL(blob)
+          setPreviewPdfUrl(objectUrl)
+        })
+        .catch(error => {
+          console.error('Anteprima PDF non disponibile', error)
+          if (active) notify(`Anteprima PDF non disponibile: ${error.message || 'riprova'}`)
+        })
+    } else {
+      setPreviewPdfUrl('')
+    }
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [screen, selected?.id])
+
+  const downloadPdf = async r => {
+    const filename = pdfFilename(r)
+    try {
+      const blob = await createPdfBlob(r)
+      if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob)
+        const saved = await Filesystem.writeFile({
+          path: filename,
+          data: base64,
+          directory: Directory.Documents,
+          recursive: true,
+        })
+        notify(`PDF salvato in Documenti: ${filename}`)
+        return saved
+      }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      notify('Download PDF avviato. Controlla la cartella Download del browser.')
+      return true
+    } catch (e) {
+      console.error('Salvataggio PDF non riuscito', e)
+      notify(`Salvataggio PDF non riuscito: ${e.message || 'riprova'}`)
+      return false
+    }
+  }
+  const printPdf = downloadPdf
+
+  const saveInApp = async r => {
+    try {
+      const pdf = await createPdfBlob(r)
+      if (!(pdf instanceof Blob) || pdf.size < 500) throw new Error('PDF non valido')
+      // Il rapporto è già nell'archivio locale; qui verifichiamo e marchiamo la disponibilità del documento.
+      const exists = store.reports.some(item => item.id === r.id)
+      const next = { ...store, reports: exists ? store.reports.map(item => item.id === r.id ? { ...item, savedInApp: true, pdfFilename: pdfFilename(r), savedAt: stamp() } : item) : [{ ...r, savedInApp: true, pdfFilename: pdfFilename(r), savedAt: stamp() }, ...store.reports] }
+      await localDbSet(KEY, next); setStore(next); setSelected(next.reports.find(item => item.id === r.id)); setCompletionAction('saved'); setScreen('complete')
+    } catch (e) { notify(`Salvataggio in app non riuscito: ${e.message || 'riprova'}`) }
   }
 
   const addPhotos = async e => {
     const files = Array.from(e.target.files || [])
-    const converted = await Promise.all(files.map(file => new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve({ name: file.name, dataUrl: reader.result }); reader.readAsDataURL(file) })))
-    setPhotos(old => [...old, ...converted].slice(0, 6)); e.target.value = ''
+    const converted = await Promise.all(files.map(file => new Promise(resolve => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const source = new Image()
+        source.onload = () => {
+          const maxSide = 1600
+          const scale = Math.min(1, maxSide / Math.max(source.width, source.height))
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.round(source.width * scale))
+          canvas.height = Math.max(1, Math.round(source.height * scale))
+          canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height)
+          resolve({ name: file.name, dataUrl: canvas.toDataURL('image/jpeg', 0.72) })
+        }
+        source.onerror = () => resolve({ name: file.name, dataUrl: reader.result })
+        source.src = reader.result
+      }
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    })))
+    setPhotos(old => [...old, ...converted.filter(Boolean)].slice(0, 6)); e.target.value = ''
   }
 
   const activeReminders = store.reminders.filter(r => !r.resolved)
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let alive = true
+    const syncNotifications = async () => {
+      try {
+        const ids = Array.from({ length: 336 }, (_, i) => ({ id: 51000 + i }))
+        await LocalNotifications.cancel({ notifications: ids })
+        try { await LocalNotifications.removeAllDeliveredNotifications() } catch {}
+        const active = store.reminders.filter(item => !item.resolved)
+        if (!active.length) return
+        const permission = await LocalNotifications.checkPermissions()
+        if (permission.display !== 'granted') return
+        const hours = Number(store.reminderIntervalHours || active[0]?.intervalHours || 6)
+        const count = active.length
+        const body = count === 1 ? 'Hai 1 sonda con allarme disabilitato. Verifica il ripristino.' : `Hai ${count} sonde con allarme disabilitato. Verifica il ripristino.`
+        const total = Math.floor((14 * 24) / hours)
+        const now = Date.now()
+        const notifications = Array.from({ length: total }, (_, index) => ({
+          id: 51000 + index,
+          title: 'Promemoria catena del freddo',
+          body,
+          schedule: { at: new Date(now + (index + 1) * hours * 60 * 60 * 1000) },
+          group: 'cold-chain-reminders',
+          groupSummary: true,
+          extra: { type: 'disabled-probes', count }
+        }))
+        if (alive && notifications.length) await LocalNotifications.schedule({ notifications })
+      } catch (error) { console.warn('Programmazione promemoria non riuscita', error) }
+    }
+    syncNotifications()
+    let appStateListener
+    CapacitorApp.addListener('appStateChange', ({ isActive }) => { if (isActive) syncNotifications() }).then(listener => { appStateListener = listener }).catch(() => {})
+    return () => { alive = false; appStateListener?.remove() }
+  }, [store.reminders, store.reminderIntervalHours])
   const resolveReminder = id => setStore(old => ({ ...old, reminders: old.reminders.map(r => r.id === id ? { ...r, resolved: true, resolvedAt: stamp() } : r) }))
   const openRecord = r => { setSelected(r); setScreen('detail') }
+  const isShortReportCase = () => {
+    const values = answers.map(item => item.answer)
+    const noReferentCase = values[1] === 'SÌ' && values[2] === 'NO'
+    const remoteCase = values[1] === 'NO' && values[2] === 'SÌ' && values[3] === 'SÌ' && values[4] === 'SÌ'
+    return noReferentCase || remoteCase
+  }
+
+  const deleteRecord = r => {
+    let adminPin = localStorage.getItem('cold-chain-admin-pin')
+    let pinJustCreated = false
+    if (!adminPin) {
+      const first = window.prompt('Primo utilizzo: imposta un PIN locale riservato al responsabile (minimo 4 caratteri).')
+      if (!first || first.length < 4) { notify('PIN non impostato: operazione annullata.'); return }
+      const confirmPin = window.prompt('Ripeti il PIN per confermarlo.')
+      if (first !== confirmPin) { notify('I PIN non coincidono.'); return }
+      adminPin = first
+      pinJustCreated = true
+      localStorage.setItem('cold-chain-admin-pin', adminPin)
+    }
+    if (!pinJustCreated) {
+      const entered = window.prompt('Inserisci il PIN del responsabile per autorizzare l’annullamento.')
+      if (entered !== adminPin) { notify('PIN non corretto. Operazione non autorizzata.'); return }
+    }
+    const reason = window.prompt('Motivo obbligatorio dell’annullamento (es. rapporto duplicato o dati errati):')
+    if (!reason || !reason.trim()) { notify('Motivo mancante: rapporto non modificato.'); return }
+    if (!window.confirm('Il rapporto, le foto e il PDF saranno eliminati definitivamente. Resterà solo la traccia di audit. Confermi?')) return
+    const audit = { id: uid(), action: 'eliminazione definitiva', reportId: r.id, technician: r.technician, responsible: responsibleName || 'Responsabile autorizzato', reason: reason.trim(), at: stamp() }
+    setStore(old => ({
+      ...old,
+      reports: old.reports.filter(item => item.id !== r.id),
+      auditLogs: [...(old.auditLogs || []), audit]
+    }))
+    setSelected(null)
+    setScreen('archive')
+    notify('Rapporto eliminato. È rimasta solo la traccia di audit.')
+  }
 
   return <div className="shell">
+    {transitionHome && <div className="snow-transition-overlay" aria-live="assertive"><div className="snow-transition-flake"><Snowflake size={Math.min(260, Math.max(180, window.innerWidth * 0.58))} strokeWidth={1.15}/></div><span>Preparazione nuovo intervento…</span></div>}
     {showSplash && <div className="splash-screen" role="status" aria-label="Avvio San Martino">
       <div className="splash-content">
         <div className="splash-logos">
@@ -245,78 +562,143 @@ export default function App() {
         <div className="app-mark"><Thermometer size={20}/></div>
         <div className="brand-name"><b>Reperibilità</b><small>CATENA DEL FREDDO</small></div>
       </div>
-      <span className="local">● Locale</span>
+      <button className={`theme-swipe ${theme === 'dark' ? 'is-dark' : ''}`} role="switch" aria-checked={theme === 'dark'} aria-label="Attiva modalità scura" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}><span className="theme-swipe-thumb">{theme === 'dark' ? <Moon size={15}/> : <Sun size={15}/>}</span><span className="theme-swipe-label">{theme === 'dark' ? 'DARK' : 'LIGHT'}</span></button>
     </header>
     <div className="partner-logos" aria-label="Loghi istituzionali">
       <img src="/fresenius-logo.png" alt="Fresenius" className="fresenius-logo"/>
       <img src="/irccs-aom-logo.png" alt="IRCCS Azienda Ospedaliera Metropolitana" className="aom-logo"/>
     </div>
+    {screen === 'processing' && <main className="page completion-page" aria-live="polite">
+      <div className="snowflake-processing"><Snowflake size={82} strokeWidth={1.6}/></div>
+      <h1>Sto completando l’intervento…</h1>
+      <p>Salvataggio del rapporto e generazione del PDF con le eventuali fotografie e la firma.</p>
+      <div className="completion-steps"><span>Verifica dei dati</span><span>Salvataggio in archivio</span><span>Preparazione del PDF</span></div>
+    </main>}
+
+    {screen === 'complete' && selected && <main className={`page completion-page ${transitionHome ? 'snow-roll-out' : ''}`} aria-live="polite">
+      <div className="snowflake-success"><Snowflake size={88} strokeWidth={1.5}/><span><Check size={34} strokeWidth={3}/></span></div>
+      <h1>Tutto ok! Puoi riposare!</h1>
+      <p>{completionAction === 'saved' ? 'PDF salvato nell’Archivio dell’app. Potrai riaprirlo e condividerlo di nuovo.' : 'PDF generato e menu di condivisione aperto.'}</p>
+      <button className="primary" onClick={async () => { if (Capacitor.isNativePlatform()) { try { await CapacitorApp.exitApp() } catch {} } else { setScreen('home') } }}><X/> Uscita dall’applicazione</button>
+      <button className="secondary" onClick={() => { setTransitionHome(true); window.setTimeout(() => { setTransitionHome(false); setSelected(null); setScreen('home'); setStep('start'); setTech(''); setShiftStart('20:00'); setShiftEnd(''); setAnswers([]); setHistory([]); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setResponsiblePresent('no'); setResponsibleName('') }, 2000) }}><Snowflake/> Registra un nuovo intervento</button>
+    </main>}
+
     {screen === 'home' && <main className="page">
       <div className="hero"><span className="eyebrow">ASSISTENTE OPERATIVO</span><h1>Intervento<br/>notturno</h1><p>Una domanda alla volta. I passaggi essenziali, senza complicazioni.</p></div>
       <label className="field-label">Tecnico reperibile</label><input className="input" value={tech} onChange={e => setTech(e.target.value)} placeholder="Nome e cognome" />
-      <div className="shift-fields"><div><label className="field-label">Inizio turno</label><input className="input" type="time" value={shiftStart} onChange={e => setShiftStart(e.target.value)}/></div><div><label className="field-label">Fine turno</label><input className="input" type="time" value={shiftEnd} onChange={e => setShiftEnd(e.target.value)}/></div></div>
+      <label className="field-label">Inizio turno</label><input className="input" type="time" value={shiftStart} onChange={e => setShiftStart(e.target.value)}/>
       <button className="primary big" onClick={start}><ClipboardList/> Inizia checklist <ChevronRight/></button>
       <button className="secondary" onClick={() => setScreen('archive')}><Archive/> Archivio rapporti <span className="counter">{store.reports.length}</span></button>
       <button className="secondary" onClick={() => setScreen('reminders')}><Bell/> Sonde con allarme disabilitato <span className="counter">{activeReminders.length}</span></button>
-      <p className="privacy"><ShieldCheck size={15}/> Prototipo dimostrativo: i dati sono salvati su questo dispositivo.</p>
+      
+      <p className="privacy"><ShieldCheck size={15}/> I dati sono salvati su questo dispositivo. La bozza viene recuperata se l'app si chiude.</p>
     </main>}
 
+    {screen === 'review' && <main className="page">
+      <button className="back" onClick={() => setScreen('checklist')}><ArrowLeft size={17}/> Torna alla checklist</button>
+      <div className="question"><div className="qicon"><FileText/></div><h1>Riepilogo intervento</h1><p>Controlla le risposte e i dati raccolti prima di procedere alla chiusura.</p></div>
+      <div className="report-card"><b>Attività e verifiche</b><div className="answers">{answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div>
+        <p><b>Tecnico:</b> {tech}</p><p><b>Inizio turno:</b> {shiftStart}</p><p><b>Frigorifero INV:</b> {data.fridge || 'Non rilevato'}</p><p><b>Sonda INV:</b> {data.probe || 'Non rilevata'}</p><p><b>Note:</b> {[data.monitorNote, data.callReason, data.unnotifiedContacts].filter(Boolean).join(' · ') || 'Nessuna'}</p><p><b>Fotografie:</b> {photos.length}</p></div>
+      <button className="primary" onClick={() => setScreen('confirm-close')}>Procedi alla conferma <ArrowRight/></button>
+    </main>}
+
+    {screen === 'confirm-close' && <main className="page">
+      <button className="back" onClick={() => setScreen('review')}><ArrowLeft size={17}/> Torna al riepilogo</button>
+      <div className="question"><div className="qicon"><CheckCircle2/></div><h1>Vuoi concludere?</h1><p>Confermando, verrà registrato automaticamente l’orario di fine intervento. In base alle risposte, l'app richiederà la firma del referente oppure genererà direttamente un rapporto tecnico contenuto.</p></div>
+      <button className="primary" onClick={() => { const end = new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}); setShiftEnd(end); setScreen('details-choice') }}>Sì, continua <CheckCircle2/></button>
+      <button className="secondary" onClick={() => setScreen('checklist')}>No, torno all’intervento</button>
+    </main>}
+
+    {screen === 'details-choice' && <main className="page"><button className="back" onClick={() => setScreen('confirm-close')}><ArrowLeft size={17}/> Indietro</button><div className="question"><div className="qicon"><FileText/></div><h1>Vuoi compilare e aggiungere dettagli al rapporto tecnico?</h1><p>Puoi integrare i dati identificativi e le attività non già raccolte dalla checklist. I campi sono facoltativi.</p></div><button className="primary" onClick={() => { setDetails(old => ({ ...old, codeEnte: data.ticket?.trim() || old.codeEnte || '', interventionType:'REPERIBILITA’' })); setScreen('details-form') }}>Sì, aggiungi dettagli <ArrowRight/></button><button className="secondary" onClick={() => { if (!window.confirm('Vuoi procedere alla conclusione dell’intervento senza i dettagli?')) return; setStep('finalize'); setScreen('checklist') }}>No, procedi senza dettagli</button></main>}
+    {screen === 'details-form' && <main className="page"><button className="back" onClick={() => setScreen('details-choice')}><ArrowLeft size={17}/> Indietro</button><div className="question"><div className="qicon"><FileText/></div><h1>Dettagli del rapporto tecnico</h1><p>Compila i dati disponibili. Puoi lasciare vuoti i campi non pertinenti.</p></div>
+      {[['codeEnte','Codice ente / richiesta n.'],['presidio','Presidio'],['padiglione','Padiglione'],['reparto','Reparto'],['piano','Piano'],['stanza','Stanza'],['description','Descrizione apparecchiatura'],['manufacturer','Costruttore'],['model','Modello'],['serial','Matricola / serial number'],['instrument','Strumento di misura / S/N'],['workHours','Ore lavoro'],['travelHours','Ore viaggio'],['materials','Materiali impiegati']].map(([key,label]) => <label className="field-label" key={key}>{label}<input className="input" value={details[key] || ''} onChange={e => setDetails(old => ({...old,[key]:e.target.value}))}/></label>)}
+      <label className="field-label">Tipo di intervento<input className="input" value="REPERIBILITÀ" readOnly /></label>
+      <label className="field-label">Guasto riscontrato / descrizione attività<textarea className="textarea" value={details.fault || ''} onChange={e => setDetails(old => ({...old,fault:e.target.value}))} placeholder="Aggiungi informazioni rispetto alla sintesi della checklist: guasto, diagnosi e attività svolte"/></label><p className="muted">Tutti i campi sono facoltativi: puoi proseguire anche lasciandoli vuoti.</p><button className="primary" onClick={() => { setStep('finalize'); setScreen('checklist') }}>Continua alle firme <ArrowRight/></button><button className="secondary" onClick={() => { setStep('finalize'); setScreen('checklist') }}>Salta i dettagli <ArrowRight/></button></main>}
+
     {screen === 'checklist' && <main className="page">
-      <div className="checklist-actions"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Esci</button><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
+      <div className="checklist-actions"><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
       {history.length > 0 && <button className="back-step" onClick={backStep}><ArrowLeft size={16}/> Domanda precedente</button>}
       <div className="stepcount">GUIDA OPERATIVA <span>CATENA DEL FREDDO</span></div>
-      {step === 'monitor' && <Question title="Hai controllato Spylog e verificato l'escursione termica?" help="Controlla quando è iniziata e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); go('notes-monitor') }}/>} 
-      {step === 'notes-monitor' && <TextStep title="Aggiungi una nota" help="Indica brevemente cosa non è stato possibile verificare." value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => go('wait')}/>}
+      {step === 'monitor' && <Question title="Hai verificato l'allarme ricevuto su Spylog?" help="Prima di procedere, verifica l'allarme e l'andamento della temperatura." onYes={() => { addAnswer('Controllo Spylog e andamento temperatura', 'SÌ'); go('wait') }} onNo={() => { addAnswer('Controllo Spylog e andamento temperatura', 'NO'); setSpylogBlocked(true) }}/>} 
+      {step === 'notes-monitor' && <TextStep title="Aggiungi una nota" help="Indica brevemente cosa non è stato possibile verificare." value={data.monitorNote || ''} onChange={v => setData(d => ({...d, monitorNote:v}))} onNext={() => go('wait')}/>}
       {step === 'wait' && <Question title="Dopo 15–30 minuti, la temperatura è rientrata?" help="Continua a monitorare Spylog durante l'attesa." onYes={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Temperatura rientrata dopo 15–30 minuti', 'NO'); go('call') }}/>} 
       {step === 'call' && <Question title="Hai contattato il centralino e chiesto del reparto?" help="Chiedi se è presente personale o se qualcuno sta lavorando sul frigorifero." onYes={() => { addAnswer('Contattato centralino / reparto', 'SÌ'); go('staff') }} onNo={() => { addAnswer('Contattato centralino / reparto', 'NO'); go('call-note') }}/>} 
-      {step === 'call-note' && <TextStep title="Perché non è stato possibile contattare il reparto?" value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => go('onsite')}/>}
+      {step === 'call-note' && <TextStep title="Perché non è stato possibile contattare il reparto?" value={data.callReason || ''} onChange={v => setData(d => ({...d, callReason:v}))} onNext={() => go('onsite')}/>}
       {step === 'staff' && <Question title="C'è qualcuno che sta lavorando sul frigorifero?" help="Se la porta è stata richiusa, continua a verificare Spylog da remoto." onYes={() => { addAnswer('Personale al lavoro sul frigorifero', 'SÌ'); go('remote') }} onNo={() => { addAnswer('Personale al lavoro sul frigorifero', 'NO'); go('onsite') }}/>} 
       {step === 'remote' && <Question title="La temperatura è rientrata durante il monitoraggio?" help="In genere, se il frigorifero è stato richiuso, si continua a controllare da remoto." onYes={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Monitoraggio remoto dopo chiusura frigorifero', 'NO'); go('onsite') }}/>} 
       {step === 'onsite' && <>
         <div className="question"><div className="qicon"><Thermometer/></div><h1>Intervento sul posto</h1><p>Identifica il frigorifero e la sonda / Spylog.</p></div>
-        <label className="field-label">Numero inventario del frigorifero</label><input className="input" value={data.fridge} onChange={e => setData(d => ({...d, fridge:e.target.value}))} placeholder="Inventario frigorifero"/>
-        <label className="field-label">Numero inventario della sonda / Spylog</label><input className="input" value={data.probe} onChange={e => setData(d => ({...d, probe:e.target.value}))} placeholder="Inventario sonda"/>
+        <label className="field-label">Numero inventario del frigorifero</label><input className="input" value={data.fridge} inputMode="numeric" onChange={e => setData(d => ({...d, fridge:e.target.value}))} placeholder="Inventario frigorifero"/>
+        <label className="field-label">Numero inventario della sonda / Spylog</label><input className="input" value={data.probe} inputMode="numeric" onChange={e => setData(d => ({...d, probe:e.target.value}))} placeholder="Inventario sonda"/>
+        <label className="field-label">Riferimento ticket Biogest / MainSim (facoltativo)</label><input className="input" value={data.ticket || ''} onChange={e => setData(d => ({...d, ticket:e.target.value}))} placeholder="Es. 2026/07357"/>
         <div className="photo-box"><div><b>Foto dell'intervento</b><small>Facoltative · massimo 6 foto</small></div><label className="photo-button"><ImagePlus size={18}/> Aggiungi foto<input type="file" accept="image/*" capture="environment" multiple onChange={addPhotos} hidden/></label>{photos.length > 0 && <div className="thumbs">{photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div>
-        <button className="primary" onClick={() => { if (!data.fridge.trim() || !data.probe.trim()) { notify('Inserisci entrambi i numeri inventario.'); return } go('resolved') }}>Continua <ArrowRight/></button>
+        <button className="primary" onClick={() => { if (!data.fridge.trim() && !data.probe.trim()) { notify('Inserisci almeno uno dei due numeri inventario.'); return } go('resolved') }}>Continua <ArrowRight/></button>
       </>}
       {step === 'resolved' && <Question title="Il problema è stato risolto?" help="Se il frigorifero non riparte, avvisa i responsabili per lo spostamento dei farmaci." onYes={() => { addAnswer('Problema risolto sul posto', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Problema risolto sul posto', 'NO'); go('notify') }}/>} 
       {step === 'notify' && <Question title="Hai avvisato Ingegneria Clinica e gli eventuali responsabili che i farmaci devono essere spostati?" help="Lo spostamento non è gestito dal tecnico reperibile. Dopo la comunicazione, il tuo intervento è concluso." onYes={() => { addAnswer('Comunicati necessità di spostamento farmaci ai responsabili', 'SÌ'); go('alarm') }} onNo={() => { addAnswer('Comunicati necessità di spostamento farmaci ai responsabili', 'NO'); go('notify-note') }}/>} 
-      {step === 'notify-note' && <TextStep title="A chi devi ancora comunicare la necessità di spostamento?" value={data.notes} onChange={v => setData(d => ({...d, notes:v}))} onNext={() => { addAnswer('Comunicazione non completata', 'NO', data.notes); go('alarm') }}/>} 
+      {step === 'notify-note' && <TextStep title="A chi devi ancora comunicare la necessità di spostamento?" value={data.unnotifiedContacts || ''} onChange={v => setData(d => ({...d, unnotifiedContacts:v}))} onNext={() => { addAnswer('Comunicazione non completata', 'NO', data.unnotifiedContacts || ''); go('alarm') }}/>} 
       {step === 'alarm' && <Question title="È stato disabilitato qualche allarme?" help="Registra la sonda se un allarme è stato disabilitato, ad esempio durante uno sbrinamento." onYes={() => { addAnswer('È stato disabilitato qualche allarme?', 'SÌ'); go('alarm-id') }} onNo={() => { setData(d => ({...d, disabled:'no'})); addAnswer('È stato disabilitato qualche allarme?', 'NO'); beginCloseReport('Intervento concluso') }}/>} 
       {step === 'alarm-id' && <>
         <div className="question"><div className="qicon"><Bell/></div><h1>Numero inventario della sonda disabilitata</h1><p>Inserisci il numero per renderlo visibile agli altri reperibili.</p></div>
-        <input className="input" value={data.disabledInventory} onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
+        <input className="input" value={data.disabledInventory} inputMode="numeric" onChange={e => setData(d => ({...d, disabledInventory:e.target.value}))} placeholder="N. inventario sonda"/>
         <button className="primary" onClick={() => { if (!data.disabledInventory.trim()) { notify('Inserisci il numero inventario della sonda.'); return } go('alarm-remind') }}>Continua <ArrowRight/></button>
       </>}
-      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
+      {step === 'alarm-remind' && <Question title={`Vuoi che venga ricordato che la sonda N. INV ${data.disabledInventory} è stata disabilitata?`} help="Il promemoria sarà visibile agli altri reperibili finché non viene confermato il ripristino." onYes={() => { addAnswer('Promemoria sonda disabilitata', 'SÌ', `INV ${data.disabledInventory}`); go('alarm-frequency') }} onNo={() => { addAnswer('Promemoria sonda disabilitata', 'NO', `INV ${data.disabledInventory}`); beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'no' }) }}/>} 
+      {step === 'alarm-frequency' && <>
+        <div className="question"><div className="qicon"><Bell/></div><h1>Frequenza dei promemoria</h1><p>Con quale frequenza vuoi ricevere un promemoria per riabilitare l'allarme della sonda INV {data.disabledInventory}?</p></div>
+        <label className="field-label" htmlFor="reminder-interval">Quanto spesso vuoi che ti venga ricordato di riabilitare l'allarme?</label>
+        <select id="reminder-interval" className="input" value={data.reminderIntervalHours || store.reminderIntervalHours || 6} onChange={e => setData(d => ({...d, reminderIntervalHours:Number(e.target.value)}))}>
+          <option value={1}>Ogni ora</option><option value={6}>Ogni 6 ore</option><option value={12}>Ogni 12 ore</option><option value={24}>Ogni 24 ore</option>
+        </select>
+        <button className="primary" onClick={async () => { if (Capacitor.isNativePlatform()) { try { const permission = await LocalNotifications.checkPermissions(); if (permission.display !== 'granted') { const requested = await LocalNotifications.requestPermissions(); if (requested.display !== 'granted') notify('Permesso notifiche negato: i promemoria non potranno essere mostrati.') } } catch (error) { notify('Non è stato possibile verificare il permesso notifiche.') } } beginCloseReport('Intervento concluso', { disabled:'si', remindDisabled:'si' }) }}>Conferma frequenza <ArrowRight/></button>
+      </>}
       {step === 'finalize' && <>
-        <div className="question"><div className="qicon"><FileText/></div><h1>Referente e firma</h1><p>Indica se è presente un responsabile o tecnico referente. La firma è facoltativa.</p></div>
-        <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>SÌ, presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>NO</button></div>
+        <div className="question"><div className="qicon"><FileText/></div><h1>Firme del rapporto</h1><p>Se il referente o un suo delegato è presente, acquisisci nome e firma. Se è assente, puoi comunque generare il rapporto registrando l’assenza.</p></div>
+        <label className="field-label">Firma del tecnico (obbligatoria)</label><button className="secondary" onClick={() => { setSignatureTarget('operator'); setSignatureOpen(true) }}>Acquisisci firma del tecnico</button>{operatorSignatureData && <div className="signature-preview"><img src={operatorSignatureData} alt="Firma tecnico"/><small>Firma tecnico acquisita</small></div>}
+        <div className="choices"><button className={responsiblePresent === 'si' ? 'yes' : ''} onClick={() => setResponsiblePresent('si')}>Referente presente</button><button className={responsiblePresent === 'no' ? 'no' : ''} onClick={() => setResponsiblePresent('no')}>Non presente</button></div>
         {responsiblePresent === 'si' && <>
           <label className="field-label">Nome e cognome del referente</label>
           <input className="input" value={responsibleName} onChange={e => setResponsibleName(e.target.value)} placeholder="Nome e cognome"/>
-          <label className="field-label">Firma del referente (facoltativa)</label>
-          <button className="secondary" onClick={() => setSignatureOpen(true)}>Apri area firma a schermo intero</button>
+          <label className="field-label">Firma del referente (obbligatoria)</label>
+          <button className="secondary" onClick={() => { setSignatureTarget('responsible'); setSignatureOpen(true) }}>Apri area firma a schermo intero</button>
           {signatureData && <div className="signature-preview"><img src={signatureData} alt="Firma acquisita"/><small>Firma acquisita</small></div>}
         </>}
         <button className="primary" onClick={() => {
-          if (responsiblePresent === 'si' && !responsibleName.trim()) { notify('Inserisci nome e cognome del referente.'); return }
+          if (!operatorSignatureData) { notify('Acquisisci la firma del tecnico prima di concludere.'); return }
+          if (responsiblePresent === 'si') {
+            if (!responsibleName.trim()) { notify('Inserisci nome e cognome del referente.'); return }
+            if (!signatureData) { notify('Acquisisci la firma del referente prima di concludere.'); return }
+          } else {
+            setResponsibleName('')
+            setSignatureData('')
+          }
           closeReport(pendingClose.outcome, pendingClose.overrides)
         }}>Concludi e genera rapporto <CheckCircle2/></button>
       </>}
       <div className="footnote">Le risposte vengono registrate nel rapporto tecnico. Il prototipo non sostituisce le procedure del servizio.</div>
     </main>}
 
-    {screen === 'report' && selected && <main className="page"><div className="success-head"><CheckCircle2 size={34}/><h1>Rapporto generato</h1><p>L'intervento è stato registrato.</p></div><div className="report-card"><div className="report-title"><FileText/><div><b>Rapporto tecnico</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small></div></div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="thumbs">{selected.photos.map((p,i)=><img key={i} src={p.dataUrl} alt={p.name}/>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button><div className="share-grid"><button onClick={() => shareWhatsApp(selected)}>WhatsApp</button><button onClick={() => shareTelegram(selected)}>Telegram</button></div><button className="primary" onClick={() => shareNative(selected)}>Condividi rapporto</button><p className="privacy">Il rapporto è già salvato automaticamente nell’archivio di questo dispositivo.</p><button className="secondary" onClick={() => setScreen('home')}>Torna alla home</button></main>}
+    {screen === 'report-preview' && selected && <main className="page">
+      <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Questa è l’anteprima del PDF finale, con i dati già inseriti nel modulo e le eventuali pagine fotografiche.</p></div>
+      <div className="report-card rt-preview">
+        <h2>Anteprima PDF compilato</h2>
+        {previewPdfUrl
+          ? <iframe title="Anteprima del rapporto tecnico PDF" src={previewPdfUrl} style={{ width:'100%', height:'72vh', minHeight:520, border:0, borderRadius:12, background:'#fff' }} />
+          : <div className="empty"><FileText size={28}/><b>Preparazione anteprima…</b><span>Sto generando il PDF completo del rapporto.</span></div>}
+      </div>
+      <button className="primary" disabled={completionBusy} onClick={() => saveInApp(selected)}><Archive/> Salva PDF nell’app</button>
+      <button className="secondary" disabled={completionBusy} onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button>
+    </main>}
 
-    {signatureOpen && <SignatureModal onSave={dataUrl => { setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
-    {showDone && screen === 'report' && <div className="modal-backdrop"><section className="info-modal done-modal"><div className="done-icon"><CheckCircle2 size={42}/></div><h2>Tutto ok, puoi riposare!</h2><p>Il rapporto tecnico è stato generato e salvato nell’archivio di questo dispositivo.</p><button className="primary" onClick={() => { setShowDone(false); setScreen('home') }}>Torna alla home</button></section></div>}
-    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Consultazione in sola lettura. I rapporti non sono modificabili.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
+    {signatureOpen && <SignatureModal onSave={dataUrl => { if (signatureTarget === 'operator') setOperatorSignatureData(dataUrl); else setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
+    {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
+    {screen === 'archive' && <main className="page"><button className="back" onClick={() => { setExitConfirmOpen(false); setScreen('home') }}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><b>Checklist originale · sola lettura</b><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="primary" onClick={() => printPdf(selected)}><Download/> Stampa / salva PDF</button><button className="secondary" onClick={() => downloadText(selected)}><FileText/> Scarica TXT</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => { setExitConfirmOpen(false); setScreen('archive') }}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina definitivamente (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
+    {exitConfirmOpen && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true" aria-labelledby="exit-title"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2 id="exit-title">Vuoi uscire?</h2><p>{screen === 'checklist' ? 'Hai concluso l’intervento? Sei sicuro di voler uscire? Se scegli No, la bozza resterà salvata e potrai continuare.' : 'Sei sicuro di voler chiudere l’applicazione?'}</p><button className="primary" onClick={confirmExit}>{screen === 'checklist' ? 'Sì, torna alla Home' : 'Sì, esci'}</button><button className="secondary" onClick={() => setExitConfirmOpen(false)}>No, resta nell’app</button></section></div>}
     {toast && <div className="toast">{toast}</div>}
   </div>
 }
@@ -325,56 +707,117 @@ function Question({ title, help, onYes, onNo }) { return <><div className="quest
 function TextStep({ title, help, value, onChange, onNext }) { return <><div className="question"><div className="qicon"><FileText/></div><h1>{title}</h1>{help && <p>{help}</p>}</div><textarea className="textarea" value={value} onChange={e => onChange(e.target.value)} placeholder="Scrivi una breve nota..."/><button className="primary" onClick={onNext}>Continua <ArrowRight/></button></> }
 
 function SignatureModal({ onSave, onClose }) {
+  useEffect(() => {
+    const enterLandscape = async () => {
+      try {
+        await ScreenOrientation.lock({ orientation: 'landscape' })
+      } catch (error) {
+        console.warn('Impossibile impostare lo schermo in orizzontale', error)
+      }
+    }
+    enterLandscape()
+    return () => {
+      // La schermata firma è l'unica schermata orizzontale: al suo smontaggio
+      // ripristiniamo esplicitamente il verticale, invece di sbloccare soltanto.
+      ScreenOrientation.lock({ orientation: 'portrait' }).catch(error => {
+        console.warn('Impossibile ripristinare lo schermo in verticale', error)
+      })
+    }
+  }, [])
   const canvasRef = useRef(null)
+  const areaRef = useRef(null)
   const drawing = useRef(false)
-  const hasInk = useRef(false)
+  const strokes = useRef([])
+  const activeStroke = useRef(null)
   const [inkVisible, setInkVisible] = useState(false)
-  const point = e => {
+  const [isLandscape, setIsLandscape] = useState(() => window.innerWidth > window.innerHeight)
+
+  const redraw = () => {
     const canvas = canvasRef.current
-    const rect = canvas.getBoundingClientRect()
-    return { x: (e.clientX - rect.left) * (canvas.width / rect.width), y: (e.clientY - rect.top) * (canvas.height / rect.height) }
-  }
-  const start = e => {
-    const c = canvasRef.current
-    drawing.current = true
-    c.setPointerCapture(e.pointerId)
-    const p = point(e)
-    const ctx = c.getContext('2d')
-    ctx.beginPath()
-    ctx.moveTo(p.x, p.y)
-  }
-  const move = e => {
-    if (!drawing.current) return
-    const p = point(e)
-    const ctx = canvasRef.current.getContext('2d')
-    ctx.lineWidth = 4
+    const area = areaRef.current
+    if (!canvas || !area) return
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+    canvas.width = Math.round(rect.width * dpr)
+    canvas.height = Math.round(rect.height * dpr)
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.lineWidth = 3
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.strokeStyle = '#172033'
-    ctx.lineTo(p.x, p.y)
-    ctx.stroke()
-    hasInk.current = true
-    setInkVisible(true)
+    for (const stroke of strokes.current) {
+      if (!stroke.length) continue
+      ctx.beginPath()
+      ctx.moveTo(stroke[0].x, stroke[0].y)
+      for (let i = 1; i < stroke.length; i++) ctx.lineTo(stroke[i].x, stroke[i].y)
+      if (stroke.length === 1) ctx.lineTo(stroke[0].x + 0.1, stroke[0].y + 0.1)
+      ctx.stroke()
+    }
   }
-  const end = () => { drawing.current = false }
+
+  useEffect(() => {
+    const updateOrientation = () => setIsLandscape(window.innerWidth > window.innerHeight)
+    window.addEventListener('resize', updateOrientation)
+    window.addEventListener('orientationchange', updateOrientation)
+    redraw()
+    const observer = typeof ResizeObserver !== 'undefined' && areaRef.current ? new ResizeObserver(redraw) : null
+    if (observer && areaRef.current) observer.observe(areaRef.current)
+    window.addEventListener('orientationchange', redraw)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('orientationchange', redraw)
+      window.removeEventListener('resize', updateOrientation)
+      window.removeEventListener('orientationchange', updateOrientation)
+    }
+  }, [isLandscape])
+
+  const point = e => {
+    const rect = canvasRef.current.getBoundingClientRect()
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+  const start = e => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas || !canvas.getContext('2d')) return
+    drawing.current = true
+    activeStroke.current = [point(e)]
+    strokes.current.push(activeStroke.current)
+    try { canvas.setPointerCapture(e.pointerId) } catch {}
+    redraw()
+    if (!inkVisible) setInkVisible(true)
+  }
+  const move = e => {
+    if (!drawing.current || !activeStroke.current) return
+    e.preventDefault()
+    activeStroke.current.push(point(e))
+    redraw()
+  }
+  const end = () => { drawing.current = false; activeStroke.current = null }
   const clear = () => {
-    const c = canvasRef.current
-    c.getContext('2d').clearRect(0, 0, c.width, c.height)
-    hasInk.current = false
+    strokes.current = []
+    drawing.current = false
+    activeStroke.current = null
     setInkVisible(false)
+    redraw()
   }
+
   return <div className="signature-overlay">
     <div className="signature-toolbar">
-      <div><b>Firma del referente</b><small>Ruota il telefono in orizzontale per firmare comodamente</small></div>
+      <div><b>Firma del referente</b><small>Orientamento orizzontale automatico per la firma</small></div>
       <button className="secondary" onClick={onClose}>Annulla</button>
     </div>
-    <div className="signature-area">
-      <canvas ref={canvasRef} width={1600} height={480} className="signature-canvas" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end}/>
-      <span>Firma qui con il dito o con una penna touch</span>
-    </div>
+    {isLandscape ? <div className="signature-area" ref={areaRef}>
+      <canvas ref={canvasRef} className="signature-canvas" onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}/>
+      {!inkVisible && <span>Firma qui con il dito o con una penna touch</span>}
+    </div> : <div className="signature-rotate-notice"><b>Preparazione area firma</b><span>La schermata si adatta automaticamente alla firma.</span></div>}
     <div className="signature-toolbar bottom">
       <button className="secondary" onClick={clear}>Cancella</button>
-      <button className="primary" disabled={!inkVisible} onClick={() => { if (hasInk.current) onSave(canvasRef.current.toDataURL('image/png')) }}>Conferma firma <CheckCircle2/></button>
+      <button className="primary" disabled={!inkVisible || !isLandscape} onClick={() => { const canvas = canvasRef.current; if (canvas && inkVisible) onSave(canvas.toDataURL('image/png')) }}>Conferma firma <CheckCircle2/></button>
     </div>
   </div>
 }
