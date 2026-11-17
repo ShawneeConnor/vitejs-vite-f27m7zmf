@@ -323,3 +323,26 @@ html, body, #root { min-height:100%; }
 :root[data-theme="dark"] .answer-row small { color:#b5c3d5; }
 :root[data-theme="dark"] .answer-row .yes { color:#7ee0b7; }
 :root[data-theme="dark"] .answer-row .no { color:#ff9da6; }
+
+
+/* Anteprima del modulo RT originale */
+.rt-preview-template {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 12px auto;
+  border: 1px solid var(--border, #cbd5e1);
+  border-radius: 8px;
+  background: #fff;
+}
+.rt-preview-summary {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-soft, rgba(127, 127, 127, .10));
+  overflow-wrap: anywhere;
+}
+.rt-preview-summary p {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
