@@ -327,7 +327,7 @@ export default function App() {
       const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(templateBlob)
     })
     doc.addImage(templateData, 'PNG', 0, 0, 210, 297)
-    const text = (value, x, y, max=52, size=13, maxLines=2) => {
+    const text = (value, x, y, max=52, size=12.5, maxLines=2) => {
       if (value === undefined || value === null || String(value).trim() === '') return
       doc.setFont('helvetica','normal')
       doc.setTextColor(10,10,10)
@@ -339,7 +339,7 @@ export default function App() {
         doc.setFontSize(fontSize)
       }
       const lines = doc.splitTextToSize(content, max).slice(0, maxLines)
-      doc.text(lines, x, y, { lineHeightFactor: 1.12 })
+      doc.text(lines, x, y, { lineHeightFactor: 1.08 })
     }
     const date = new Date(r.createdAt)
     const dateText = date.toLocaleDateString('it-IT')
@@ -360,7 +360,7 @@ export default function App() {
     text(r.notes || '', 13, 266, 190, 13, 2)
     if (r.operatorSignatureData) doc.addImage(r.operatorSignatureData, 'PNG', 12, 275, 70, 15)
     if (r.responsible?.signatureData) doc.addImage(r.responsible.signatureData, 'PNG', 132, 275, 65, 15)
-    else text('REFERENTE NON PRESENTE – FIRMA NON ACQUISITA', 128, 282, 70, 11)
+    else text('REFERENTE NON PRESENTE – FIRMA NON ACQUISITA', 128, 282, 70, 10.5)
     if (r.photos?.length) {
       doc.addPage()
       doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('DOCUMENTAZIONE FOTOGRAFICA', 15, 18)
