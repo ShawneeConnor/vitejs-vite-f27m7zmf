@@ -54,6 +54,7 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('cold-chain-theme') || 'light')
   const [completionBusy, setCompletionBusy] = useState(false)
   const [completionAction, setCompletionAction] = useState('')
+  const [previewPdfUrl, setPreviewPdfUrl] = useState('')
   const [transitionHome, setTransitionHome] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
   const [draftLoaded, setDraftLoaded] = useState(false)
@@ -196,9 +197,14 @@ export default function App() {
         throw new Error('Il PDF non è stato generato correttamente. La bozza è stata conservata.')
       }
 
+      const existingReportIndex = store.reports.findIndex(item => item.id === completed.id)
+      const persistedReport = { ...completed, savedInApp: false, shared: false }
+      const nextReports = existingReportIndex >= 0
+        ? store.reports.map(item => item.id === completed.id ? { ...item, ...persistedReport } : item)
+        : [persistedReport, ...store.reports]
       const nextStore = {
         ...store,
-        reports: store.reports,
+        reports: nextReports,
         reminders: finalData.disabled === 'si' && finalData.remindDisabled === 'si'
           ? [...store.reminders, { id: uid(), inventory: finalData.disabledInventory.trim(), createdAt: stamp(), reportId: record.id, resolved: false, intervalHours: Number(finalData.reminderIntervalHours || store.reminderIntervalHours || 6) }]
           : store.reminders,
@@ -291,11 +297,18 @@ export default function App() {
         const base64 = await blobToBase64(blob)
         const saved = await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Cache, recursive: true })
         await Share.share({ title: 'Rapporto tecnico – Catena del freddo', text: shareText(r), files: [saved.uri], dialogTitle: 'Condividi rapporto PDF' })
+        const latest = await localDbGet(KEY) || store
+        const next = { ...latest, reports: latest.reports.map(item => item.id === r.id ? { ...item, shared: true, sharedAt: stamp() } : item) }
+        await localDbSet(KEY, next); setStore(next)
         setCompletionAction('shared'); setScreen('complete'); return
       }
       const file = new File([blob], filename, { type: 'application/pdf' })
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ title: 'Rapporto tecnico – Catena del freddo', files: [file], text: shareText(r) }); setCompletionAction('shared'); setScreen('complete')
+        await navigator.share({ title: 'Rapporto tecnico – Catena del freddo', files: [file], text: shareText(r) })
+        const latest = await localDbGet(KEY) || store
+        const next = { ...latest, reports: latest.reports.map(item => item.id === r.id ? { ...item, shared: true, sharedAt: stamp() } : item) }
+        await localDbSet(KEY, next); setStore(next)
+        setCompletionAction('shared'); setScreen('complete')
       } else {
         downloadPdf(r)
         notify('PDF scaricato. Puoi allegarlo da Download.')
@@ -314,40 +327,78 @@ export default function App() {
       const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(templateBlob)
     })
     doc.addImage(templateData, 'PNG', 0, 0, 210, 297)
-    const text = (value, x, y, max=52, size=7) => { if (!value) return; doc.setFont('helvetica','normal'); doc.setFontSize(size); doc.setTextColor(20,20,20); doc.text(doc.splitTextToSize(String(value), max).slice(0,2), x, y) }
+    const text = (value, x, y, max=52, size=13, maxLines=2) => {
+      if (value === undefined || value === null || String(value).trim() === '') return
+      doc.setFont('helvetica','normal')
+      doc.setTextColor(10,10,10)
+      const content = String(value).trim()
+      let fontSize = size
+      doc.setFontSize(fontSize)
+      while (fontSize > 10 && content.length < 55 && doc.getTextWidth(content) > max) {
+        fontSize -= 0.5
+        doc.setFontSize(fontSize)
+      }
+      const lines = doc.splitTextToSize(content, max).slice(0, maxLines)
+      doc.text(lines, x, y, { lineHeightFactor: 1.12 })
+    }
     const date = new Date(r.createdAt)
     const dateText = date.toLocaleDateString('it-IT')
     // Campi del modulo originale: coordinate in millimetri riferite alla scansione A4.
-    text(r.technician, 8, 45, 50, 7)
-    text(r.details?.codeEnte || r.ticketReference || '', 132, 20, 60, 7)
-    text(dateText, 8, 32, 23, 7); text(r.shift?.start || '', 65, 32, 20, 7); text(dateText, 127, 32, 23, 7); text(r.shift?.end || '', 174, 32, 20, 7)
-    text(r.fridgeInventory || r.probeInventory || '', 8, 61, 49, 7)
-    text(r.details?.presidio || '', 60, 61, 73, 7); text(r.details?.padiglione || '', 135, 61, 58, 7)
-    text(r.details?.reparto || '', 8, 71, 100, 7); text(r.details?.piano || '', 111, 71, 23, 7); text(r.details?.stanza || '', 137, 71, 56, 7)
-    text(r.details?.description || '', 8, 82, 48, 6); text(r.details?.manufacturer || '', 60, 82, 48, 6); text(r.details?.model || '', 111, 82, 48, 6); text(r.details?.serial || '', 161, 82, 32, 6)
-    text(r.details?.fault || '', 108, 101, 84, 6)
-    text(r.summary || '', 8, 169, 190, 6)
-    text(r.details?.instrument || '', 8, 181, 55, 6); text(r.details?.workHours || '', 116, 181, 25, 6); text(r.details?.travelHours || '', 164, 181, 25, 6)
-    text(r.details?.materials || '', 8, 201, 185, 6)
-    text(r.outcome || '', 8, 254, 185, 7)
-    text(r.notes || '', 8, 266, 190, 6)
+    text(r.technician, 13, 44, 50, 13)
+    text(r.details?.codeEnte || r.ticketReference || '', 116, 22, 35, 13)
+    text(dateText, 13, 32, 23, 13); text(r.shift?.start || '', 65, 32, 20, 13); text(dateText, 127, 32, 23, 13); text(r.shift?.end || '', 174, 32, 20, 13)
+    text(r.fridgeInventory || r.probeInventory || '', 13, 61, 49, 13)
+    text(r.details?.presidio || '', 60, 61, 73, 13); text(r.details?.padiglione || '', 135, 61, 58, 13)
+    text(r.details?.reparto || '', 13, 71, 100, 13); text(r.details?.piano || '', 111, 71, 23, 13); text(r.details?.stanza || '', 137, 71, 56, 13)
+    text(r.details?.description || '', 13, 82, 48, 13); text(r.details?.manufacturer || '', 60, 82, 48, 13); text(r.details?.model || '', 111, 82, 48, 13); text(r.details?.serial || '', 161, 82, 32, 13)
+    text(r.details?.fault || '', 108, 101, 84, 13, 4)
+    // Sintesi checklist: più righe, corpo leggibile, confinata nel riquadro Descrizione intervento.
+    text(r.summary || '', 13, 155, 190, 13, 13)
+    text(r.details?.instrument || '', 13, 181, 55, 13); text(r.details?.workHours || '', 116, 181, 25, 13); text(r.details?.travelHours || '', 164, 181, 25, 13)
+    text(r.details?.materials || '', 13, 201, 185, 13, 3)
+    text(r.outcome || '', 13, 254, 185, 13, 2)
+    text(r.notes || '', 13, 266, 190, 13, 2)
     if (r.operatorSignatureData) doc.addImage(r.operatorSignatureData, 'PNG', 12, 275, 70, 15)
     if (r.responsible?.signatureData) doc.addImage(r.responsible.signatureData, 'PNG', 132, 275, 65, 15)
-    else text('REFERENTE NON PRESENTE – FIRMA NON ACQUISITA', 128, 282, 70, 5)
+    else text('REFERENTE NON PRESENTE – FIRMA NON ACQUISITA', 128, 282, 70, 11)
     if (r.photos?.length) {
       doc.addPage()
       doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('DOCUMENTAZIONE FOTOGRAFICA', 15, 18)
-      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text(`Rapporto ${r.id} · ${dateText} · ${r.technician}`, 15, 25)
+      doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text(`Rapporto ${r.id} · ${dateText} · ${r.technician}`, 15, 25)
       const cellW=86, cellH=105, gapX=12, gapY=8, startY=34
       r.photos.forEach((photo,index) => {
         const pageIndex=Math.floor(index/4), slot=index%4
         if (pageIndex>0 && slot===0) { doc.addPage(); doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text('DOCUMENTAZIONE FOTOGRAFICA – CONTINUA',15,18) }
         const row=Math.floor(slot/2), col=slot%2, x=15+col*(cellW+gapX), y=startY+row*(cellH+gapY)
-        try { const props=doc.getImageProperties(photo.dataUrl); const ratio=Math.min((cellW-4)/props.width,82/props.height); const w=props.width*ratio, h=props.height*ratio; doc.addImage(photo.dataUrl,undefined,x+(cellW-w)/2,y,w,h); doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text(doc.splitTextToSize(`Foto ${index+1} – ${photo.name || 'Allegato'}`,cellW),x,y+88) } catch { doc.text(`Foto ${index+1}: immagine non leggibile`,x,y+8) }
+        try { const props=doc.getImageProperties(photo.dataUrl); const ratio=Math.min((cellW-4)/props.width,82/props.height); const w=props.width*ratio, h=props.height*ratio; doc.addImage(photo.dataUrl,undefined,x+(cellW-w)/2,y,w,h); doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text(doc.splitTextToSize(`Foto ${index+1} – ${photo.name || 'Allegato'}`,cellW),x,y+88) } catch { doc.text(`Foto ${index+1}: immagine non leggibile`,x,y+8) }
       })
     }
     return doc.output('blob')
   }
+
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    if (screen === 'report-preview' && selected) {
+      setPreviewPdfUrl('')
+      createPdfBlob(selected)
+        .then(blob => {
+          if (!active) return
+          objectUrl = URL.createObjectURL(blob)
+          setPreviewPdfUrl(objectUrl)
+        })
+        .catch(error => {
+          console.error('Anteprima PDF non disponibile', error)
+          if (active) notify(`Anteprima PDF non disponibile: ${error.message || 'riprova'}`)
+        })
+    } else {
+      setPreviewPdfUrl('')
+    }
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [screen, selected?.id])
 
   const downloadPdf = async r => {
     const filename = pdfFilename(r)
@@ -527,7 +578,7 @@ export default function App() {
     {screen === 'complete' && selected && <main className={`page completion-page ${transitionHome ? 'snow-roll-out' : ''}`} aria-live="polite">
       <div className="snowflake-success"><Snowflake size={88} strokeWidth={1.5}/><span><Check size={34} strokeWidth={3}/></span></div>
       <h1>Tutto ok! Puoi riposare!</h1>
-      <p>{completionAction === 'saved' ? 'Rapporto salvato nell’Archivio dell’app.' : 'PDF generato e menu di condivisione aperto.'}</p>
+      <p>{completionAction === 'saved' ? 'PDF salvato nell’Archivio dell’app. Potrai riaprirlo e condividerlo di nuovo.' : 'PDF generato e menu di condivisione aperto.'}</p>
       <button className="primary" onClick={async () => { if (Capacitor.isNativePlatform()) { try { await CapacitorApp.exitApp() } catch {} } else { setScreen('home') } }}><X/> Uscita dall’applicazione</button>
       <button className="secondary" onClick={() => { setTransitionHome(true); window.setTimeout(() => { setTransitionHome(false); setSelected(null); setScreen('home'); setStep('start'); setTech(''); setShiftStart('20:00'); setShiftEnd(''); setAnswers([]); setHistory([]); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setResponsiblePresent('no'); setResponsibleName('') }, 2000) }}><Snowflake/> Registra un nuovo intervento</button>
     </main>}
@@ -628,9 +679,14 @@ export default function App() {
     </main>}
 
     {screen === 'report-preview' && selected && <main className="page">
-      <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Rapporto pronto per essere archiviato o condiviso.</p></div>
-      <div className="report-card rt-preview"><h2>Modulo RT – Rapporto tecnico</h2><p className="muted">Anteprima del modulo originale compilato. Il PDF condiviso o archiviato utilizza questo stesso modello.</p><img className="rt-preview-template" src="/rt-prova-template.png" alt="Modulo RT originale"/><div className="rt-preview-summary"><b>Descrizione intervento – sintesi checklist</b><p>{selected.summary || 'Nessuna sintesi disponibile.'}</p><small>Ticket: {selected.ticketReference || 'Non specificato'} · Tipo: REPERIBILITÀ</small></div></div>
-      <button className="primary" disabled={completionBusy} onClick={() => saveInApp(selected)}><Archive/> Salva in App</button>
+      <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Questa è l’anteprima del PDF finale, con i dati già inseriti nel modulo e le eventuali pagine fotografiche.</p></div>
+      <div className="report-card rt-preview">
+        <h2>Anteprima PDF compilato</h2>
+        {previewPdfUrl
+          ? <iframe title="Anteprima del rapporto tecnico PDF" src={previewPdfUrl} style={{ width:'100%', height:'72vh', minHeight:520, border:0, borderRadius:12, background:'#fff' }} />
+          : <div className="empty"><FileText size={28}/><b>Preparazione anteprima…</b><span>Sto generando il PDF completo del rapporto.</span></div>}
+      </div>
+      <button className="primary" disabled={completionBusy} onClick={() => saveInApp(selected)}><Archive/> Salva PDF nell’app</button>
       <button className="secondary" disabled={completionBusy} onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button>
     </main>}
 
