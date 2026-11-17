@@ -136,8 +136,9 @@ export default function App() {
       if (screen === 'confirm-close') { setScreen('review'); return }
       if (screen === 'complete') { setExitConfirmOpen(true); return }
       if (screen === 'processing') return
-      if (screen === 'report-preview' || screen === 'archive' || screen === 'reminders') { setScreen('home'); return }
-      if (screen === 'detail') { setScreen('archive'); return }
+      if (screen === 'archive') { setExitConfirmOpen(false); setScreen('home'); return }
+      if (screen === 'detail') { setExitConfirmOpen(false); setScreen('archive'); return }
+      if (screen === 'report-preview' || screen === 'reminders') { setScreen('home'); return }
       setExitConfirmOpen(true)
     }
     CapacitorApp.addListener('backButton', handleBack).then(h => {
@@ -226,10 +227,6 @@ export default function App() {
       ? 'Le verifiche previste per l’intervento sono state completate. L’attività del tecnico reperibile si considera conclusa.'
       : `Esito dell’intervento: ${r.outcome}.`
     const lines = [
-      'FRESENIUS  |  IRCCS AZIENDA OSPEDALIERA METROPOLITANA',
-      'SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO',
-      'RAPPORTO TECNICO DI INTERVENTO',
-      '',
       `Rapporto n.: ${r.id}`,
       `Data e ora: ${fmt(r.createdAt)}`,
       `Codice Ente / Richiesta N. (Ticket MainSim / Biogest): ${r.ticketReference || 'Non specificato'}`,
@@ -328,8 +325,8 @@ export default function App() {
     text(r.details?.presidio || '', 60, 61, 73, 7); text(r.details?.padiglione || '', 135, 61, 58, 7)
     text(r.details?.reparto || '', 8, 71, 100, 7); text(r.details?.piano || '', 111, 71, 23, 7); text(r.details?.stanza || '', 137, 71, 56, 7)
     text(r.details?.description || '', 8, 82, 48, 6); text(r.details?.manufacturer || '', 60, 82, 48, 6); text(r.details?.model || '', 111, 82, 48, 6); text(r.details?.serial || '', 161, 82, 32, 6)
-    text(r.details?.fault || r.report, 108, 101, 84, 6)
-    text(r.summary || r.report, 8, 151, 190, 7)
+    text(r.details?.fault || '', 108, 101, 84, 6)
+    text(r.summary || '', 8, 169, 190, 6)
     text(r.details?.instrument || '', 8, 181, 55, 6); text(r.details?.workHours || '', 116, 181, 25, 6); text(r.details?.travelHours || '', 164, 181, 25, 6)
     text(r.details?.materials || '', 8, 201, 185, 6)
     text(r.outcome || '', 8, 254, 185, 7)
@@ -632,16 +629,16 @@ export default function App() {
 
     {screen === 'report-preview' && selected && <main className="page">
       <div className="success-head"><CheckCircle2 size={34}/><h1>Intervento concluso</h1><p>Rapporto pronto per essere archiviato o condiviso.</p></div>
-      <div className="report-card rt-preview"><div className="rt-letterhead"><div className="rt-logos"><img src={FRESENIUS_LOGO} alt="Fresenius"/><img src={AOM_LOGO} alt="IRCCS Azienda Ospedaliera Metropolitana"/></div><b>SERVIZIO DI REPERIBILITÀ – CATENA DEL FREDDO</b><h2>RAPPORTO TECNICO DI INTERVENTO</h2></div><pre>{selected.report}</pre>{selected.responsible?.signatureData && <div className="rt-signature"><b>Firma del referente</b><img src={selected.responsible.signatureData} alt="Firma del referente"/></div>}{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{`Foto ${i+1} – ${p.name}`}</figcaption></figure>)}</div>}</div>
+      <div className="report-card rt-preview"><h2>Modulo RT – Rapporto tecnico</h2><p className="muted">Anteprima del modulo originale compilato. Il PDF condiviso o archiviato utilizza questo stesso modello.</p><img className="rt-preview-template" src="/rt-prova-template.png" alt="Modulo RT originale"/><div className="rt-preview-summary"><b>Descrizione intervento – sintesi checklist</b><p>{selected.summary || 'Nessuna sintesi disponibile.'}</p><small>Ticket: {selected.ticketReference || 'Non specificato'} · Tipo: REPERIBILITÀ</small></div></div>
       <button className="primary" disabled={completionBusy} onClick={() => saveInApp(selected)}><Archive/> Salva in App</button>
       <button className="secondary" disabled={completionBusy} onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button>
     </main>}
 
     {signatureOpen && <SignatureModal onSave={dataUrl => { if (signatureTarget === 'operator') setOperatorSignatureData(dataUrl); else setSignatureData(dataUrl); setSignatureOpen(false) }} onClose={() => setSignatureOpen(false)} />}
     {spylogBlocked && <div className="modal-backdrop"><section className="info-modal done-modal" role="alertdialog" aria-modal="true"><div className="done-icon warning"><AlertTriangle size={42}/></div><h2>E CHE ASPETTI? 😂</h2><p>Prima di procedere devi verificare l'allarme su Spylog!</p><button className="primary" onClick={() => { buzz(); setSpylogBlocked(false) }}>Va bene, verifico</button></section></div>}
-    {screen === 'archive' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
+    {screen === 'archive' && <main className="page"><button className="back" onClick={() => { setExitConfirmOpen(false); setScreen('home') }}><ArrowLeft size={17}/> Indietro</button><h1>Archivio rapporti</h1><p className="muted">Archivio locale dei rapporti. Apri un intervento per consultarlo o esportarlo.</p>{store.reports.length === 0 ? <div className="empty"><Archive size={28}/><b>Nessun intervento registrato</b><span>I rapporti compariranno qui al termine della checklist.</span></div> : store.reports.map(r => <button className="record" key={r.id} onClick={() => openRecord(r)}><div><b>{r.fridgeInventory ? `Frigo INV ${r.fridgeInventory}` : 'Intervento da remoto'}</b><small>{fmt(r.createdAt)} · {r.technician}</small><small>{r.cancelled ? `ANNULLATO · ${r.cancellationReason || 'Motivo non disponibile'}` : r.outcome} · {r.photos?.length || 0} foto</small></div><ChevronRight/></button>)}</main>}
 
-    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => setScreen('archive')}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina definitivamente (responsabile)</button></main>}
+    {screen === 'detail' && selected && <main className="page"><button className="back" onClick={() => { setExitConfirmOpen(false); setScreen('archive') }}><ArrowLeft size={17}/> Archivio</button><h1>Dettaglio intervento</h1><div className="report-card"><div className="archive-heading"><b>Checklist originale</b><span>SOLO LETTURA</span></div><small>{fmt(selected.createdAt)} · {selected.technician} · Turno {selected.shift?.start || '—'}–{selected.shift?.end || '—'}</small><div className="answers">{selected.answers.map((a,i)=><div className="answer-row" key={i}><span>{a.question}</span><b className={a.answer === 'SÌ' ? 'yes' : 'no'}>{a.answer}</b>{a.note && <small>{a.note}</small>}</div>)}</div><pre>{selected.report}</pre>{selected.photos?.length > 0 && <div className="photo-gallery">{selected.photos.map((p,i)=><figure key={i}><img src={p.dataUrl} alt={p.name}/><figcaption>{p.name}</figcaption></figure>)}</div>}</div><button className="secondary" onClick={() => shareNative(selected)}><FileText/> Condividi PDF</button><button className="danger-button" onClick={() => deleteRecord(selected)}><X size={17}/> Elimina definitivamente (responsabile)</button></main>}
 
     {screen === 'reminders' && <main className="page"><button className="back" onClick={() => setScreen('home')}><ArrowLeft size={17}/> Indietro</button><h1>Sonde con allarme disabilitato</h1><p className="muted">Promemoria registrati dai tecnici. Conferma il ripristino solo dopo averlo verificato.</p>{activeReminders.length === 0 ? <div className="empty"><CheckCircle2 size={28}/><b>Nessun promemoria aperto</b></div> : activeReminders.map(r => <div className="reminder" key={r.id}><div><b>Sonda INV {r.inventory}</b><small>Registrata il {fmt(r.createdAt)}</small><span className="status">Da verificare / ripristinare</span></div><button onClick={() => { if (window.confirm(`Confermi il ripristino della sonda INV ${r.inventory}?`)) resolveReminder(r.id) }}>Conferma ripristino</button></div>)}</main>}
     {showInfo && <div className="modal-backdrop" onClick={() => setShowInfo(false)}><section className="info-modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowInfo(false)}>✕</button><h2>Reperibili utili</h2><p><b>FARMACIA E UFA</b><span>Reperibile Farmacia</span></p><p><b>PAD 1</b><span>Reperibile FRU</span></p><p><b>PAD 5</b><span>Reperibile CCS</span></p><p><b>CBA</b><span>Referente indicato sul frigorifero / congelatore</span></p><small>Promemoria operativo rapido.</small></section></div>}
