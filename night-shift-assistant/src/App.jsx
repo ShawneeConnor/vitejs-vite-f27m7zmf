@@ -41,7 +41,7 @@ export default function App() {
   const [answers, setAnswers] = useState([])
   const [data, setData] = useState({ fridge: '', probe: '', ticket: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: 6, monitorNote: '', callReason: '', unnotifiedContacts: '' })
   const [photos, setPhotos] = useState([])
-  const [details, setDetails] = useState({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'', instrument:'', workHours:'', travelHours:'', materials:'' })
+  const [details, setDetails] = useState({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' })
   const [selected, setSelected] = useState(null)
   const [toast, setToast] = useState('')
   const [pendingClose, setPendingClose] = useState({ outcome: 'Intervento concluso', overrides: {} })
@@ -79,7 +79,7 @@ export default function App() {
           setShiftStart(draft.shiftStart || '20:00'); setShiftEnd(draft.shiftEnd || '')
           setHistory(draft.history || []); setAnswers(draft.answers || [])
           setData(draft.data || { fridge:'', probe:'', ticket:'', disabled:'no', disabledInventory:'', remindDisabled:'si', reminderIntervalHours:6, monitorNote:'', callReason:'', unnotifiedContacts:'' })
-          setPhotos(draft.photos || []); setDetails(draft.details || { codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'', instrument:'', workHours:'', travelHours:'', materials:'' }); setPendingClose(draft.pendingClose || { outcome:'Intervento concluso', overrides:{} })
+          setPhotos(draft.photos || []); setDetails(draft.details || { codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setPendingClose(draft.pendingClose || { outcome:'Intervento concluso', overrides:{} })
           setResponsiblePresent(draft.responsiblePresent || 'no'); setResponsibleName(draft.responsibleName || '')
           setSignatureData(draft.signatureData || ''); setOperatorSignatureData(draft.operatorSignatureData || '')
           if (!await localDbGet(DRAFT_KEY)) await localDbSet(DRAFT_KEY,draft)
@@ -148,7 +148,7 @@ export default function App() {
       listener?.remove()
     }
   }, [screen, history, signatureOpen, spylogBlocked, showInfo, exitConfirmOpen])
-  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: store.reminderIntervalHours || 6, monitorNote: '', callReason: '', unnotifiedContacts: '' }); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setOperatorSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
+  const start = () => { if (!tech.trim()) { notify('Inserisci nome e cognome del tecnico.'); return } if (!shiftStart) { notify('Inserisci l’orario di inizio turno.'); return } setAnswers([]); setHistory([]); setData({ fridge: '', probe: '', disabled: 'no', disabledInventory: '', remindDisabled: 'si', reminderIntervalHours: store.reminderIntervalHours || 6, monitorNote: '', callReason: '', unnotifiedContacts: '' }); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setOperatorSignatureData(''); setStep('monitor'); setScreen('checklist'); setSpylogBlocked(false) }
 
   const beginCloseReport = (outcome, overrides = {}) => {
     setPendingClose({ outcome, overrides })
@@ -232,7 +232,8 @@ export default function App() {
       '',
       `Rapporto n.: ${r.id}`,
       `Data e ora: ${fmt(r.createdAt)}`,
-      `Riferimento ticket Biogest / MainSim: ${r.ticketReference || 'Non specificato'}`, 
+      `Codice Ente / Richiesta N. (Ticket MainSim / Biogest): ${r.ticketReference || 'Non specificato'}`,
+      'Tipo di intervento: REPERIBILITÀ', 
       `Tecnico reperibile: ${r.technician}`,
       `Turno: ${r.shift?.start || '—'} – ${r.shift?.end || '—'}`,
       r.shortReport ? 'Referente e firma: non previsti per questa tipologia di intervento.' : `Responsabile / referente: ${r.responsible?.present ? r.responsible.name : 'Non presente / non indicato'}`,
@@ -321,7 +322,7 @@ export default function App() {
     const dateText = date.toLocaleDateString('it-IT')
     // Campi del modulo originale: coordinate in millimetri riferite alla scansione A4.
     text(r.technician, 8, 45, 50, 7)
-    text(r.details?.codeEnte || '', 132, 20, 24, 7); text(r.ticketReference || '', 158, 20, 35, 7)
+    text(r.details?.codeEnte || r.ticketReference || '', 132, 20, 60, 7)
     text(dateText, 8, 32, 23, 7); text(r.shift?.start || '', 65, 32, 20, 7); text(dateText, 127, 32, 23, 7); text(r.shift?.end || '', 174, 32, 20, 7)
     text(r.fridgeInventory || r.probeInventory || '', 8, 61, 49, 7)
     text(r.details?.presidio || '', 60, 61, 73, 7); text(r.details?.padiglione || '', 135, 61, 58, 7)
@@ -398,8 +399,26 @@ export default function App() {
 
   const addPhotos = async e => {
     const files = Array.from(e.target.files || [])
-    const converted = await Promise.all(files.map(file => new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve({ name: file.name, dataUrl: reader.result }); reader.readAsDataURL(file) })))
-    setPhotos(old => [...old, ...converted].slice(0, 6)); e.target.value = ''
+    const converted = await Promise.all(files.map(file => new Promise(resolve => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const source = new Image()
+        source.onload = () => {
+          const maxSide = 1600
+          const scale = Math.min(1, maxSide / Math.max(source.width, source.height))
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(1, Math.round(source.width * scale))
+          canvas.height = Math.max(1, Math.round(source.height * scale))
+          canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height)
+          resolve({ name: file.name, dataUrl: canvas.toDataURL('image/jpeg', 0.72) })
+        }
+        source.onerror = () => resolve({ name: file.name, dataUrl: reader.result })
+        source.src = reader.result
+      }
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    })))
+    setPhotos(old => [...old, ...converted.filter(Boolean)].slice(0, 6)); e.target.value = ''
   }
 
   const activeReminders = store.reminders.filter(r => !r.resolved)
@@ -513,7 +532,7 @@ export default function App() {
       <h1>Tutto ok! Puoi riposare!</h1>
       <p>{completionAction === 'saved' ? 'Rapporto salvato nell’Archivio dell’app.' : 'PDF generato e menu di condivisione aperto.'}</p>
       <button className="primary" onClick={async () => { if (Capacitor.isNativePlatform()) { try { await CapacitorApp.exitApp() } catch {} } else { setScreen('home') } }}><X/> Uscita dall’applicazione</button>
-      <button className="secondary" onClick={() => { setTransitionHome(true); window.setTimeout(() => { setTransitionHome(false); setSelected(null); setScreen('home'); setStep('start'); setTech(''); setShiftStart('20:00'); setShiftEnd(''); setAnswers([]); setHistory([]); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setResponsiblePresent('no'); setResponsibleName('') }, 2000) }}><Snowflake/> Registra un nuovo intervento</button>
+      <button className="secondary" onClick={() => { setTransitionHome(true); window.setTimeout(() => { setTransitionHome(false); setSelected(null); setScreen('home'); setStep('start'); setTech(''); setShiftStart('20:00'); setShiftEnd(''); setAnswers([]); setHistory([]); setPhotos([]); setDetails({ codeEnte:'', presidio:'', padiglione:'', reparto:'', piano:'', stanza:'', description:'', manufacturer:'', model:'', serial:'', fault:'', interventionType:'REPERIBILITA’', instrument:'', workHours:'', travelHours:'', materials:'' }); setSignatureData(''); setResponsiblePresent('no'); setResponsibleName('') }, 2000) }}><Snowflake/> Registra un nuovo intervento</button>
     </main>}
 
     {screen === 'home' && <main className="page">
@@ -542,10 +561,11 @@ export default function App() {
       <button className="secondary" onClick={() => setScreen('checklist')}>No, torno all’intervento</button>
     </main>}
 
-    {screen === 'details-choice' && <main className="page"><button className="back" onClick={() => setScreen('confirm-close')}><ArrowLeft size={17}/> Indietro</button><div className="question"><div className="qicon"><FileText/></div><h1>Vuoi compilare e aggiungere dettagli al rapporto tecnico?</h1><p>Puoi integrare i dati identificativi e le attività non già raccolte dalla checklist. I campi sono facoltativi.</p></div><button className="primary" onClick={() => setScreen('details-form')}>Sì, aggiungi dettagli <ArrowRight/></button><button className="secondary" onClick={() => { if (!window.confirm('Vuoi procedere alla conclusione dell’intervento senza i dettagli?')) return; setStep('finalize'); setScreen('checklist') }}>No, procedi senza dettagli</button></main>}
+    {screen === 'details-choice' && <main className="page"><button className="back" onClick={() => setScreen('confirm-close')}><ArrowLeft size={17}/> Indietro</button><div className="question"><div className="qicon"><FileText/></div><h1>Vuoi compilare e aggiungere dettagli al rapporto tecnico?</h1><p>Puoi integrare i dati identificativi e le attività non già raccolte dalla checklist. I campi sono facoltativi.</p></div><button className="primary" onClick={() => { setDetails(old => ({ ...old, codeEnte: data.ticket?.trim() || old.codeEnte || '', interventionType:'REPERIBILITA’' })); setScreen('details-form') }}>Sì, aggiungi dettagli <ArrowRight/></button><button className="secondary" onClick={() => { if (!window.confirm('Vuoi procedere alla conclusione dell’intervento senza i dettagli?')) return; setStep('finalize'); setScreen('checklist') }}>No, procedi senza dettagli</button></main>}
     {screen === 'details-form' && <main className="page"><button className="back" onClick={() => setScreen('details-choice')}><ArrowLeft size={17}/> Indietro</button><div className="question"><div className="qicon"><FileText/></div><h1>Dettagli del rapporto tecnico</h1><p>Compila i dati disponibili. Puoi lasciare vuoti i campi non pertinenti.</p></div>
-      {[['codeEnte','Codice ente / richiesta n.'],['presidio','Presidio'],['padiglione','Padiglione'],['reparto','Reparto'],['piano','Piano'],['stanza','Stanza'],['description','Descrizione apparecchiatura'],['manufacturer','Costruttore'],['model','Modello'],['serial','Matricola / serial number'],['interventionType','Tipo di intervento'],['instrument','Strumento di misura / S/N'],['workHours','Ore lavoro'],['travelHours','Ore viaggio'],['materials','Materiali impiegati']].map(([key,label]) => <label className="field-label" key={key}>{label}<input className="input" value={details[key] || ''} onChange={e => setDetails(old => ({...old,[key]:e.target.value}))}/></label>)}
-      <label className="field-label">Guasto riscontrato / descrizione attività<textarea className="textarea" value={details.fault || ''} onChange={e => setDetails(old => ({...old,fault:e.target.value}))} placeholder="Descrivi il guasto e le attività svolte"/></label><button className="primary" onClick={() => { setStep('finalize'); setScreen('checklist') }}>Continua alle firme <ArrowRight/></button></main>}
+      {[['codeEnte','Codice ente / richiesta n.'],['presidio','Presidio'],['padiglione','Padiglione'],['reparto','Reparto'],['piano','Piano'],['stanza','Stanza'],['description','Descrizione apparecchiatura'],['manufacturer','Costruttore'],['model','Modello'],['serial','Matricola / serial number'],['instrument','Strumento di misura / S/N'],['workHours','Ore lavoro'],['travelHours','Ore viaggio'],['materials','Materiali impiegati']].map(([key,label]) => <label className="field-label" key={key}>{label}<input className="input" value={details[key] || ''} onChange={e => setDetails(old => ({...old,[key]:e.target.value}))}/></label>)}
+      <label className="field-label">Tipo di intervento<input className="input" value="REPERIBILITÀ" readOnly /></label>
+      <label className="field-label">Guasto riscontrato / descrizione attività<textarea className="textarea" value={details.fault || ''} onChange={e => setDetails(old => ({...old,fault:e.target.value}))} placeholder="Aggiungi informazioni rispetto alla sintesi della checklist: guasto, diagnosi e attività svolte"/></label><p className="muted">Tutti i campi sono facoltativi: puoi proseguire anche lasciandoli vuoti.</p><button className="primary" onClick={() => { setStep('finalize'); setScreen('checklist') }}>Continua alle firme <ArrowRight/></button><button className="secondary" onClick={() => { setStep('finalize'); setScreen('checklist') }}>Salta i dettagli <ArrowRight/></button></main>}
 
     {screen === 'checklist' && <main className="page">
       <div className="checklist-actions"><button className="info-button" onClick={() => setShowInfo(true)}>ⓘ Informazioni utili</button></div>
